@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>VisionCare 2.0 — Clinical Decision Support</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- ═══ LOGIN PAGE ═══════════════════════════════════════════════ -->
+<div id="page-login" class="page active">
+  <div class="login-bg">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <path d="M24 44C24 44 6 32 6 18C6 11.37 11.37 6 18 6C21.1 6 23.9 7.3 26 9.4C28.1 7.3 30.9 6 34 6C40.63 6 46 11.37 46 18C46 32 28 44 24 44Z" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+          <polyline points="14,22 20,28 26,16 32,22 38,16" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1 class="login-title">VisionCare 2.0</h1>
+      <p class="login-sub">Evidence-based. Multi-modal. Explainable.</p>
+      <div class="form-group">
+        <label>Email</label>
+        <input id="login-email" type="email" placeholder="doctor@hospital.org" value="doctor@hospital.org"/>
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <div class="pw-wrap">
+          <input id="login-pw" type="password" placeholder="Enter your password" value="password"/>
+          <button class="pw-eye" onclick="togglePw()">👁</button>
+        </div>
+      </div>
+      <button class="btn-signin" onclick="doLogin()">Sign In</button>
+      <p class="login-footer">Clinical Decision Support System — IIIT Kottayam</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ APP SHELL (Sidebar + Content) ════════════════════════════ -->
+<div id="app-shell" class="page">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon">
+        <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+          <path d="M24 44C24 44 6 32 6 18C6 11.37 11.37 6 18 6C21.1 6 23.9 7.3 26 9.4C28.1 7.3 30.9 6 34 6C40.63 6 46 11.37 46 18C46 32 28 44 24 44Z" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+          <polyline points="14,22 20,28 26,16 32,22 38,16" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">VisionCare</div>
+        <div class="brand-ver">v2.0</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" id="nav-dashboard" onclick="showPage('dashboard')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </a>
+      <a class="nav-item" id="nav-patients" onclick="showPage('patients')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Patients
+      </a>
+      <a class="nav-item" id="nav-about" onclick="showPage('about')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        About
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sf-inst">IIIT Kottayam</div>
+      <div class="sf-prog">B.Tech CSE · Sem 7</div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h2 class="topbar-title" id="topbar-title">Dashboard</h2>
+        <div class="search-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="search-input" placeholder="Search patients by MRN or name..." oninput="onSearch(this.value)"/>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="user-info">
+          <div class="user-name">Dr. Arjun Mehta</div>
+          <div class="user-role">Cardiologist</div>
+        </div>
+        <div class="user-avatar">AM</div>
+        <button class="btn-logout" onclick="doLogout()">Logout</button>
+      </div>
+    </header>
+
+    <!-- ── DASHBOARD PAGE ── -->
+    <div id="page-dashboard" class="content-page active">
+      <div class="stat-cards">
+        <div class="stat-card">
+          <div class="stat-top">
+            <span class="stat-label">TOTAL PATIENTS</span>
+            <div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+          </div>
+          <div class="stat-val">10,842</div>
+          <div class="stat-sub">+124 this month</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-top">
+            <span class="stat-label">HIGH RISK HF</span>
+            <div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+          </div>
+          <div class="stat-val">2,341</div>
+          <div class="stat-sub">+12 today</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-top">
+            <span class="stat-label">CRITICAL CASES</span>
+            <div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+          </div>
+          <div class="stat-val">156</div>
+          <div class="stat-sub">-3 from yesterday</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-top">
+            <span class="stat-label">PREDICTIONS TODAY</span>
+            <div class="stat-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+          </div>
+          <div class="stat-val">89</div>
+          <div class="stat-sub">Avg 1.4s latency</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Recent Patients</h3>
+        <table class="patient-table" id="patient-table">
+          <thead>
+            <tr>
+              <th>MRN</th><th>PATIENT NAME</th><th>AGE / GENDER</th>
+              <th>LAST ENCOUNTER</th><th>HF RISK</th><th>MORTALITY RISK</th><th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody id="patient-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── PATIENT PROFILE PAGE ── -->
+    <div id="page-patient" class="content-page">
+      <div class="breadcrumb" id="breadcrumb-patient">
+        <span onclick="showPage('dashboard')" class="bc-link">Dashboard</span>
+        <span class="bc-sep">›</span>
+        <span id="bc-patient-name" class="bc-current">Patient</span>
+      </div>
+      <div class="card patient-header-card" id="patient-header"></div>
+      <h3 class="section-title">Encounter History</h3>
+      <div id="encounter-list"></div>
+    </div>
+
+    <!-- ── ENCOUNTER ANALYSIS PAGE ── -->
+    <div id="page-encounter" class="content-page encounter-layout">
+      <!-- LEFT: Viewer -->
+      <div class="enc-left">
+        <div class="breadcrumb" id="breadcrumb-enc">
+          <span onclick="showPage('dashboard')" class="bc-link">Dashboard</span>
+          <span class="bc-sep">›</span>
+          <span id="bc-enc-patient" class="bc-link" onclick="goBackToPatient()">Patient</span>
+          <span class="bc-sep">›</span>
+          <span id="bc-enc-id" class="bc-current">E-032</span>
+        </div>
+        <div class="modal-tabs">
+          <button class="modal-tab active" onclick="switchTab(this,'tab-cxr')">● CXR</button>
+          <button class="modal-tab" onclick="switchTab(this,'tab-ecg')">● ECG</button>
+          <button class="modal-tab" onclick="switchTab(this,'tab-labs')">● Labs</button>
+        </div>
+        <div id="tab-cxr" class="tab-panel active">
+          <div class="cxr-viewer">
+            <div class="cxr-placeholder">
+              <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.58-7 8-7s8 3 8 7"/></svg>
+              <span>Chest X-Ray</span>
+              <small>PA View · 224×224</small>
+            </div>
+          </div>
+          <div class="cxr-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="gradcam-toggle" onchange="toggleGradcam()"/>
+              <span class="toggle-slider"></span>
+            </label>
+            <span>Grad-CAM Overlay</span>
+          </div>
+          <div id="cxr-findings-box" class="findings-box"></div>
+        </div>
+        <div id="tab-ecg" class="tab-panel">
+          <div class="ecg-viewer">
+            <canvas id="ecg-canvas" width="520" height="220"></canvas>
+          </div>
+          <div id="ecg-findings-box" class="findings-box"></div>
+        </div>
+        <div id="tab-labs" class="tab-panel">
+          <table class="labs-table">
+            <thead><tr><th>Test</th><th>Value</th><th>Normal Range</th><th>Status</th></tr></thead>
+            <tbody id="labs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- MIDDLE: Risk -->
+      <div class="enc-mid">
+        <div class="risk-label">RISK ASSESSMENT</div>
+        <div class="gauges-row">
+          <div class="gauge-wrap" id="gauge-hf"></div>
+          <div class="gauge-wrap" id="gauge-mort"></div>
+        </div>
+        <div class="contribution-section">
+          <div class="contrib-label">MODALITY CONTRIBUTION</div>
+          <div class="contrib-bars" id="contrib-bars"></div>
+        </div>
+        <div class="model-badge" id="model-badge"></div>
+        <div class="pred-time" id="pred-time"></div>
+        <div class="patient-info-box" id="patient-info-box"></div>
+      </div>
+
+      <!-- RIGHT: AI Chat -->
+      <div class="enc-right">
+        <div class="chat-header">
+          <div class="chat-icon">🤖</div>
+          <div>
+            <div class="chat-title">Medical AI Assistant</div>
+            <div class="chat-sub">Powered by RAG + Clinical Guidelines</div>
+          </div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-msg system">AI is aware of this patient's prediction data</div>
+          <div class="chat-msg user">Why did the AI predict this Heart Failure probability?</div>
+          <div class="chat-msg bot" id="initial-ai-msg"></div>
+        </div>
+        <div class="chat-suggestions" id="chat-suggestions">
+          <button onclick="sendSuggestion('Explain the Heart Failure risk')">Explain the Heart Failure risk</button>
+          <button onclick="sendSuggestion('What do the Lab findings indicate?')">What do the Lab findings indicate?</button>
+          <button onclick="sendSuggestion('Which AHA guideline applies?')">Which AHA guideline applies?</button>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Ask about this patient..." onkeydown="if(event.key==='Enter')sendChat()"/>
+          <button onclick="sendChat()">➤</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ABOUT PAGE ── -->
+    <div id="page-about" class="content-page">
+      <div class="about-hero">
+        <div class="about-logo">
+          <svg width="56" height="56" viewBox="0 0 48 48" fill="none">
+            <path d="M24 44C24 44 6 32 6 18C6 11.37 11.37 6 18 6C21.1 6 23.9 7.3 26 9.4C28.1 7.3 30.9 6 34 6C40.63 6 46 11.37 46 18C46 32 28 44 24 44Z" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+            <polyline points="14,22 20,28 26,16 32,22 38,16" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h1>VisionCare 2.0</h1>
+        <p>A Multi-Modal Clinical Decision Support System for Heart Failure and Mortality Prediction</p>
+        <div class="about-badges">
+          <span class="badge green">Macro AUC: 0.8105</span>
+          <span class="badge blue">SYMILE-MIMIC Dataset</span>
+          <span class="badge purple">IIIT Kottayam BTP</span>
+        </div>
+      </div>
+      <div class="about-grid">
+        <div class="about-card">
+          <h3>🧠 Model Architecture</h3>
+          <ul>
+            <li><strong>CXR Encoder:</strong> ConvNeXt-Tiny (768-D)</li>
+            <li><strong>ECG Encoder:</strong> Custom 1D-CNN (256-D)</li>
+            <li><strong>Labs Encoder:</strong> 2-layer MLP (64-D)</li>
+            <li><strong>Fusion:</strong> Cross-Attention Gated Fusion</li>
+            <li><strong>Targets:</strong> Mortality + Heart Failure</li>
+          </ul>
+        </div>
+        <div class="about-card">
+          <h3>📊 Performance</h3>
+          <ul>
+            <li><strong>Macro AUC:</strong> 0.8105</li>
+            <li><strong>Mortality AUC:</strong> 0.8022</li>
+            <li><strong>Heart Failure AUC:</strong> 0.8189</li>
+            <li><strong>Training Set:</strong> 10,000 admissions</li>
+            <li><strong>Validation Set:</strong> 750 admissions</li>
+          </ul>
+        </div>
+        <div class="about-card">
+          <h3>📋 Dataset</h3>
+          <ul>
+            <li><strong>Source:</strong> SYMILE-MIMIC (PhysioNet)</li>
+            <li><strong>Modalities:</strong> CXR + ECG + Labs</li>
+            <li><strong>Total Admissions:</strong> 11,622</li>
+            <li><strong>Mortality Labels:</strong> Real (hospital_expire_flag)</li>
+            <li><strong>HF Labels:</strong> Clinical proxy (Edema+Cardio)</li>
+          </ul>
+        </div>
+        <div class="about-card">
+          <h3>🔬 XAI Features</h3>
+          <ul>
+            <li>Grad-CAM heatmaps (CXR)</li>
+            <li>Modality contribution gates</li>
+            <li>RAG-powered AI assistant</li>
+            <li>AHA/ESC guideline citations</li>
+            <li>Per-class AUC reporting</li>
+          </ul>
+        </div>
+      </div>
+      <div class="model-version-info">
+        <h3>Model Swap Ready</h3>
+        <p>Currently running <strong id="current-model-badge">VisionCare V2</strong>. Switch to V3 by updating <code>MODEL_VERSION</code> in the backend config.</p>
+        <div class="version-compare">
+          <div class="vc active-model"><strong>V2 (Active)</strong><br/>Macro AUC: 0.8105<br/>ConvNeXt + 1D-CNN</div>
+          <div class="vc"><strong>V3 (Ready)</strong><br/>Macro AUC: TBD (training)<br/>ResNet-50 + SYMILE</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+services:
+
+  # ─── FASTAPI BACKEND ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: visioncare-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Model checkpoints — place your .pth files here on your HOST machine
+      - ./backend/models:/app/models
+      # CXR demo images — place your patient images here
+      - ./backend/demo_images:/app/demo_images
+      # Mount the parent VisionCare folder so backend can import colab_fusion_v2.py
+      - .:/visioncare_src
+    environment:
+      - MODEL_VERSION=V2
+      - PYTHONPATH=/app:/visioncare_src
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── REACT FRONTEND ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./visioncare-app
+      dockerfile: Dockerfile
+      args:
+        # Pass your Gemini key at build time: docker-compose build --build-arg GEMINI_KEY=AIza...
+        VITE_GEMINI_KEY: ${VITE_GEMINI_KEY:-}
+    container_name: visioncare-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  default:
+    name: visioncare-net

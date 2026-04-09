@@ -1,0 +1,22 @@
+# ── Large data / weights (mounted as volumes at runtime) ──────────────────────
+models/
+demo_images/
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Development / editor artefacts ────────────────────────────────────────────
+.env
+.env.*
+*.DS_Store
+.git/
+.gitignore

@@ -1,0 +1,12 @@
+# node_modules — rebuilt by npm ci inside the Docker image
+node_modules/
+
+# Build output (rebuilt inside image)
+dist/
+
+# Dev / editor artefacts
+.env
+.env.*
+*.DS_Store
+.git/
+.gitignore
