@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { User } from 'lucide-react';
 
 export default function CXRViewer({ imageSrc = null, findings = [], severity = 'normal' }) {
-  const [gradcam, setGradcam] = useState(false);
+  const [gradcam, setGradcam] = useState(true);
+  const [imageFailed, setImageFailed] = useState(false);
+  const hasImage = Boolean(imageSrc) && !imageFailed;
 
   const gradcamStyle = {
     background: severity === 'critical'
@@ -16,11 +18,22 @@ export default function CXRViewer({ imageSrc = null, findings = [], severity = '
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
       <div className="cxr-area">
-        {imageSrc ? (
+        {hasImage ? (
           <>
-            <img src={imageSrc} alt="Chest X-Ray" className="cxr-image" style={{ filter: 'grayscale(0.3) contrast(1.1)' }} />
+            <img
+              src={imageSrc}
+              alt="Chest X-Ray"
+              className="cxr-image"
+              style={{ filter: 'grayscale(0.3) contrast(1.1)' }}
+              onError={() => setImageFailed(true)}
+            />
             {gradcam && (
               <div className="gradcam-overlay" style={{ ...gradcamStyle, mixBlendMode: 'screen', opacity: 0.85 }} />
+            )}
+            {gradcam && (
+              <div style={{ position:'absolute', top:14, left:14, padding:'6px 10px', borderRadius:8, background:'rgba(2,6,23,0.82)', border:'1px solid rgba(34,197,94,0.2)', color:'var(--text-green)', fontSize:11, fontWeight:700 }}>
+                Grad-CAM active
+              </div>
             )}
           </>
         ) : (
@@ -33,7 +46,9 @@ export default function CXRViewer({ imageSrc = null, findings = [], severity = '
             </div>
             <span>Chest X-Ray</span>
             <small>PA View · 224×224</small>
-            {!imageSrc && <small style={{ color: 'var(--amber)', fontSize: 10 }}>📁 Add image to demo_images/</small>}
+            <small style={{ color: 'var(--amber)', fontSize: 10 }}>
+              {imageSrc ? 'Image could not be loaded' : 'Add image to demo_images/'}
+            </small>
           </div>
         )}
       </div>
@@ -47,7 +62,7 @@ export default function CXRViewer({ imageSrc = null, findings = [], severity = '
         </label>
         <span>Grad-CAM Overlay</span>
         {gradcam && <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--amber)' }}>
-          {severity === 'critical' ? '🔴 High activation in cardiac region' : severity === 'moderate' ? '🟡 Moderate cardiomegaly region' : '🟢 No significant activation'}
+          {severity === 'critical' ? '🔴 High activation in cardiac region' : severity === 'moderate' ? '🟡 Moderate cardiac silhouette activation' : '🟢 Mild activation pattern'}
         </span>}
       </div>
 

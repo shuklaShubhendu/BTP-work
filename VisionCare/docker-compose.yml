@@ -17,12 +17,17 @@ services:
       - ./backend/medical_texts:/app/medical_texts
       # RAG FAISS index (persisted across restarts)
       - ./backend/rag_index:/app/rag_index
+      # SQLite app data (patients + encounters)
+      - ./backend/data:/app/data
       # Mount the parent VisionCare folder so backend can import colab_fusion_v2.py
       - .:/visioncare_src
     environment:
       - MODEL_VERSION=V3
       - PYTHONPATH=/app:/visioncare_src
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-AIzaSyA3W1njiP1yH6x_ZLGC4xOUQ_miADTexwA}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GEMINI_TIMEOUT_SEC=${GEMINI_TIMEOUT_SEC:-35}
+      - GEMINI_MAX_RETRIES=${GEMINI_MAX_RETRIES:-3}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]

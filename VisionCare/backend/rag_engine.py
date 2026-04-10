@@ -11,14 +11,15 @@ Architecture:
   → Gemini 2.5 Flash → Formatted Medical Response with Citations
 """
 
-import os, json, time
+import os, json, time, asyncio
 from pathlib import Path
 from typing import Optional
 
 INDEX_DIR = Path(__file__).parent / "rag_index"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+GEMINI_TIMEOUT_SEC = float(os.getenv("GEMINI_TIMEOUT_SEC", "35"))
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "3"))
 
 # ─── Medical System Prompt ────────────────────────────────────────────────────
 
@@ -68,53 +69,155 @@ You are a clinical decision support tool trained on authoritative medical refere
 
 4. Use **bold** for key clinical values and findings.
 
-5. Keep responses between 150-350 words.
+5. Keep responses between 140-260 words.
 
-6. Structure responses with clear sections using bullet points.
+6. Structure responses with clear sections and compact bullet points.
 
 7. Always relate your answer back to the patient's specific data when available.
 
 8. When discussing risk scores, explain what drives the prediction using ALL three modalities (CXR, ECG, Labs).
 
 9. Never claim to diagnose. Use language like "suggests", "consistent with", "warrants further evaluation".
+
+10. FOLLOW THIS OUTPUT TEMPLATE EXACTLY unless user asks for a different format:
+### Patient Snapshot
+• Name/age/sex + encounter context in one line
+• Highest 2 risks with percentages and severity labels (Critical/Moderate/Low)
+
+### 8-Disease Risk Overview
+• Mortality, Heart Failure, MI, Arrhythmia, Sepsis, PE, AKI, ICU with percentages
+• Keep this as compact grouped bullets (not one long paragraph)
+
+### Clinical Drivers (CXR + ECG + Labs)
+• CXR: 1 short finding tied to risk
+• ECG: 1 short finding tied to risk
+• Labs: 1 short finding tied to risk
+
+### Recommended Clinical Focus
+• 2-3 concise next-focus items for physician review
+• Include uncertainty language ("suggests", "warrants", "consider")
+
+### Evidence
+📋 At least one citation line
 """
 
 
 # ─── Rule-Based Fallback ──────────────────────────────────────────────────────
 
 def rule_based_response(msg, patient_context):
-    """Offline fallback when both FAISS and Gemini are unavailable."""
-    ml = msg.lower()
+    """Offline fallback when Gemini is unavailable. Uses patient-specific data, not static text."""
+    ml = (msg or "").lower().strip()
     ctx = patient_context or {}
-    risks = ctx.get("risks", {})
-    gates = ctx.get("gates", {"vision": 0.339, "signal": 0.338, "clinical": 0.323})
+    risks = ctx.get("risks", {}) or {}
+    gates = ctx.get("gates", {"vision": 0.339, "signal": 0.338, "clinical": 0.323}) or {}
     cxr = round((gates.get("vision", 0.339)) * 100)
     ecg = round((gates.get("signal", 0.338)) * 100)
     labs = round((gates.get("clinical", 0.323)) * 100)
     name = ctx.get("patient_name", "this patient")
 
+    refusal = (
+        "I am VisionCare's Medical AI Assistant. I can only discuss clinical topics related to this "
+        "patient's cardiovascular risk assessment. Please ask me about the patient's risk scores, lab values, "
+        "ECG/CXR findings, or relevant clinical guidelines."
+    )
+
+    off_topic_tokens = [
+        "ipl", "cricket", "football", "weather", "recipe", "joke", "politics",
+        "movie", "song", "stock", "bitcoin", "code", "python", "java",
+    ]
+    if any(token in ml for token in off_topic_tokens):
+        return refusal
+
+    risk_meta = [
+        ("mortality", "Mortality"),
+        ("heart_failure", "Heart Failure"),
+        ("myocardial_infarction", "Myocardial Infarction"),
+        ("arrhythmia", "Arrhythmia"),
+        ("sepsis", "Sepsis"),
+        ("pulmonary_embolism", "Pulmonary Embolism"),
+        ("acute_kidney_injury", "AKI"),
+        ("icu_admission", "ICU Admission"),
+    ]
+    ranked = sorted(
+        [(key, label, float(risks.get(key, 0) or 0)) for key, label in risk_meta],
+        key=lambda item: item[2],
+        reverse=True,
+    )
+
+    def bucket(v):
+        if v >= 70:
+            return "Critical"
+        if v >= 40:
+            return "Moderate"
+        return "Low"
+
+    if not risks:
+        return (
+            f"**No stored risk profile found for {name}.**\n\n"
+            "Please run **Live V3 Inference** for this encounter first, then ask clinical questions.\n\n"
+            "📋 VisionCare 3.0 Backend Status"
+        )
+
+    if any(w in ml for w in ["highest", "top", "most", "problem", "worse", "worst", "riskiest"]):
+        top = ranked[:3]
+        return (
+            f"**Highest-concern risks for {name}:**\n\n"
+            f"• **{top[0][1]}: {top[0][2]:.1f}%** ({bucket(top[0][2])})\n"
+            f"• **{top[1][1]}: {top[1][2]:.1f}%** ({bucket(top[1][2])})\n"
+            f"• **{top[2][1]}: {top[2][2]:.1f}%** ({bucket(top[2][2])})\n\n"
+            "Clinical priority should focus first on the top-ranked risk and related organ support needs.\n\n"
+            "📋 VisionCare 3.0 Encounter Risk Ranking"
+        )
+
+    if any(w in ml for w in ["overview", "all 8", "eight", "explain all", "summary"]):
+        lines = [f"**VisionCare 3.0 risk overview for {name}:**", ""]
+        for key, label, value in ranked:
+            lines.append(f"• **{label}: {value:.1f}%** ({bucket(value)})")
+        lines.append("")
+        lines.append("Highest clinical concern is the top-ranked condition above.")
+        lines.append("")
+        lines.append("📋 VisionCare 3.0 — Stored Encounter Assessment")
+        return "\n".join(lines)
+
+    disease_aliases = {
+        "heart_failure": ["heart failure", "hf"],
+        "mortality": ["mortality", "death", "prognosis"],
+        "myocardial_infarction": ["myocardial infarction", "mi", "heart attack"],
+        "arrhythmia": ["arrhythmia", "rhythm", "af", "vt"],
+        "sepsis": ["sepsis", "infection shock"],
+        "pulmonary_embolism": ["pulmonary embolism", "pe", "embolism"],
+        "acute_kidney_injury": ["aki", "kidney"],
+        "icu_admission": ["icu", "critical care", "admission"],
+    }
+    for key, aliases in disease_aliases.items():
+        if any(alias in ml for alias in aliases):
+            value = float(risks.get(key, 0) or 0)
+            label = next((name_ for k, name_ in risk_meta if k == key), key)
+            return (
+                f"**{label} risk: {value:.1f}% ({bucket(value)})**\n\n"
+                "This response is from the backend fallback engine using this encounter's stored risk profile. "
+                "For richer explanation, enable Gemini key and re-ask.\n\n"
+                "📋 VisionCare 3.0 Encounter Risk Profile"
+            )
+
     if any(w in ml for w in ["gate", "balance", "contribut", "modal"]):
-        return f"**VisionCare 3.0 Gate Weights (Balanced):**\n\n• **CXR (Vision): {cxr}%** — chest X-ray features\n• **ECG (Signal): {ecg}%** — ECG waveform patterns\n• **Labs (Clinical): {labs}%** — blood biomarkers\n\nV3 achieves near-equal contributions through **Gate Entropy Regularization** (λ=0.01), ensuring no single modality dominates.\n\n📋 VisionCare 3.0 Architecture — Gate Entropy Regularization"
+        return (
+            "**Modality weighting (for model interpretation):**\n\n"
+            f"• **CXR: {cxr}%**\n"
+            f"• **ECG: {ecg}%**\n"
+            f"• **Labs: {labs}%**\n\n"
+            "These are model-side fusion weights, not direct clinical severity scores.\n\n"
+            "📋 VisionCare 3.0 Fusion Gate Status"
+        )
 
-    if any(w in ml for w in ["hf", "heart failure", "why", "predict"]):
-        return f"**Heart Failure Risk: {risks.get('heart_failure', '?')}%**\n\n**Multi-modal evidence:**\n• **Labs ({labs}%):** BNP elevation is the strongest HF biomarker (AHA Class I)\n• **ECG ({ecg}%):** Rhythm abnormalities present in ~30% of HF patients\n• **CXR ({cxr}%):** Cardiac changes confirmed on imaging\n\n**Co-morbidity:** AKI risk {risks.get('acute_kidney_injury', '?')}% suggests cardiorenal syndrome.\n\n📋 AHA 2022 HF Guidelines — Heidenreich PA, et al. Circulation. 2022;145:e895–e1032"
-
-    if "sepsis" in ml:
-        return f"**Sepsis Risk: {risks.get('sepsis', '?')}%**\n\nSepsis detection requires **all three modalities**:\n• **CXR:** Bilateral infiltrates → ARDS/pneumonia\n• **ECG:** Tachycardia → hemodynamic compromise\n• **Labs:** Elevated WBC, lactate markers\n\nBalanced gates ({cxr}/{ecg}/{labs}) ensure none of these signals are missed.\n\n📋 Surviving Sepsis Campaign 2021 — Evans L, et al. Intensive Care Med. 2021;47:1181–1247"
-
-    if any(w in ml for w in ["mortality", "death", "prognos"]):
-        return f"**Mortality Risk: {risks.get('mortality', '?')}%**\n\nKey drivers:\n• Multi-organ signals: AKI {risks.get('acute_kidney_injury', '?')}%, Sepsis {risks.get('sepsis', '?')}%\n• Cardiac: HF {risks.get('heart_failure', '?')}%, Arrhythmia {risks.get('arrhythmia', '?')}%\n• ICU probability: {risks.get('icu_admission', '?')}%\n\n📋 Pocock SJ et al. — MAGGIC meta-analysis, Eur Heart J 2013"
-
-    if any(w in ml for w in ["lab", "bnp", "creatinine", "troponin"]):
-        return f"**Key Lab Interpretation (Labs gate: {labs}%):**\n\n• **BNP:** Primary HF biomarker. >400 pg/mL = Class I HF indication (AHA 2022)\n• **Creatinine:** Elevated = cardiorenal syndrome risk\n• **Troponin:** Elevated = myocardial damage marker\n\nV3 gives labs **{labs}%** weight (vs only 6% in V2).\n\n📋 ESC 2021 HF Guidelines — McDonagh TA, et al. Eur Heart J. 2021;42:3599–3726"
-
-    if any(w in ml for w in ["ecg", "rhythm", "af", "arrhyth"]):
-        return f"**ECG Analysis (Signal gate: {ecg}%):**\n\nECG contributed **{ecg}%** to V3 predictions (vs only 15% in V2).\n• Arrhythmia Risk: **{risks.get('arrhythmia', '?')}%**\n• AF increases HF hospitalization by 35%\n• ICU Risk: **{risks.get('icu_admission', '?')}%**\n\n📋 AHA 2020 AF Guidelines — January CT, et al. Circulation. 2019;140:e125–e151"
-
-    if any(w in ml for w in ["cxr", "x-ray", "chest", "radiol"]):
-        return f"**CXR Analysis (Vision gate: {cxr}%):**\n\nCXR contributed **{cxr}%** via ResNet-50 encoder (2048-D).\nIn V3, CXR is one-third of the decision (vs 79% in V2).\n\nGrad-CAM highlights: Perihilar regions (fluid), cardiac silhouette (size), costophrenic angles (effusion).\n\n📋 AHA 2022 — CXR Interpretation in HF, Section 3.4"
-
-    return f"**VisionCare 3.0 Analysis for {name}:**\n\n**8-Disease Risks:**\n• Mortality: **{risks.get('mortality', '?')}%** | HF: **{risks.get('heart_failure', '?')}%** | MI: **{risks.get('myocardial_infarction', '?')}%**\n• Arrhythmia: **{risks.get('arrhythmia', '?')}%** | Sepsis: **{risks.get('sepsis', '?')}%** | PE: **{risks.get('pulmonary_embolism', '?')}%**\n• AKI: **{risks.get('acute_kidney_injury', '?')}%** | ICU: **{risks.get('icu_admission', '?')}%**\n\n**Gate Weights:** CXR {cxr}% | ECG {ecg}% | Labs {labs}%\n\nAsk about any specific disease risk, lab values, ECG/CXR findings, or clinical guidelines.\n\n📋 VisionCare 3.0 — Multi-Modal Fusion Analysis"
+    return (
+        f"**Clinical summary for {name}:**\n\n"
+        f"• Highest risk: **{ranked[0][1]} {ranked[0][2]:.1f}%** ({bucket(ranked[0][2])})\n"
+        f"• Second highest: **{ranked[1][1]} {ranked[1][2]:.1f}%** ({bucket(ranked[1][2])})\n"
+        f"• Third highest: **{ranked[2][1]} {ranked[2][2]:.1f}%** ({bucket(ranked[2][2])})\n\n"
+        "Ask me to explain any one disease risk in detail.\n\n"
+        "📋 VisionCare 3.0 Encounter Clinical Summary"
+    )
 
 
 # ─── RAG Engine Class ─────────────────────────────────────────────────────────
@@ -132,8 +235,10 @@ class MedicalRAGEngine:
         self.vectorstore = None
         self.embeddings = None
         self.ready = False
-        self.gemini_key = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_key = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
         self.chunk_count = 0
+        self.last_gemini_error = None
+        self._gemini_model = None
 
     def load_index(self):
         """Load the pre-built FAISS index. Returns True if successful."""
@@ -208,6 +313,10 @@ class MedicalRAGEngine:
                          f"Date: {patient_data.get('encounter_date', '?')}")
         if patient_data.get("condition"):
             lines.append(f"Condition: {patient_data['condition']}")
+        if patient_data.get("analysis_source"):
+            lines.append(f"Analysis Source: {patient_data.get('analysis_source')}")
+        if patient_data.get("last_inference_at"):
+            lines.append(f"Last Inference: {patient_data.get('last_inference_at')}")
 
         if risks:
             lines.append("\n8-DISEASE RISK SCORES:")
@@ -228,6 +337,68 @@ class MedicalRAGEngine:
             lines.append(f"Key Labs: {lab_str}")
 
         return "\n".join(lines)
+
+    def _get_gemini_model(self):
+        if self._gemini_model is not None:
+            return self._gemini_model
+        import google.generativeai as genai
+        genai.configure(api_key=self.gemini_key)
+        self._gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+        return self._gemini_model
+
+    async def _call_gemini(self, full_prompt: str, question: str):
+        """
+        Call Gemini SDK with retry/backoff for transient overload/availability failures.
+        Returns: (reply_text | None, error_message | None, status_code | None)
+        """
+        prompt = full_prompt + "\n\nUser question: " + question
+
+        attempts = max(1, GEMINI_MAX_RETRIES)
+        for attempt in range(1, attempts + 1):
+            try:
+                model = self._get_gemini_model()
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        model.generate_content,
+                        prompt,
+                        generation_config={
+                            "max_output_tokens": 700,
+                            "temperature": 0.25,
+                            "top_p": 0.9,
+                        },
+                    ),
+                    timeout=GEMINI_TIMEOUT_SEC,
+                )
+
+                reply = getattr(response, "text", None)
+                if reply:
+                    return reply, None, 200
+
+                candidates = getattr(response, "candidates", None) or []
+                if candidates:
+                    try:
+                        parts = candidates[0].content.parts
+                        text = "".join(getattr(p, "text", "") for p in parts).strip()
+                        if text:
+                            return text, None, 200
+                    except Exception:
+                        pass
+
+                return None, "Gemini SDK returned empty response", 200
+
+            except Exception as exc:
+                message = f"Gemini SDK call failed: {exc}"
+                lowered = message.lower()
+                is_retryable = (
+                    "503" in lowered or "unavailable" in lowered or "resourceexhausted" in lowered
+                    or "429" in lowered or "deadline" in lowered or "timeout" in lowered
+                )
+                if is_retryable and attempt < attempts:
+                    await asyncio.sleep(min(1.2 * attempt, 3.5))
+                    continue
+                return None, message, None
+
+        return None, "Gemini call exhausted retries", None
 
     async def generate_response(self, question: str, patient_data: dict = None) -> dict:
         """
@@ -278,47 +449,20 @@ class MedicalRAGEngine:
                 "latency_ms": round((time.time() - t0) * 1000),
             }
 
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{GEMINI_URL}?key={self.gemini_key}",
-                    json={
-                        "contents": [{
-                            "role": "user",
-                            "parts": [{"text": full_prompt + "\n\nUser question: " + question}]
-                        }],
-                        "generationConfig": {
-                            "maxOutputTokens": 800,
-                            "temperature": 0.3,
-                            "topP": 0.9,
-                        }
-                    },
-                    headers={"Content-Type": "application/json"},
-                )
-
-            if resp.status_code == 200:
-                data = resp.json()
-                reply = data.get("candidates", [{}])[0].get(
-                    "content", {}
-                ).get("parts", [{}])[0].get("text", "")
-
-                if reply:
-                    return {
-                        "reply": reply,
-                        "source": "gemini_rag",
-                        "model": GEMINI_MODEL,
-                        "sources_used": sources,
-                        "chunks_retrieved": len(retrieved_docs),
-                        "latency_ms": round((time.time() - t0) * 1000),
-                    }
-
-            # Gemini returned error → fallback
-            print(f"⚠️ Gemini returned {resp.status_code}: {resp.text[:200]}")
-
-        except Exception as e:
-            print(f"⚠️ Gemini call failed: {e}")
+        reply, err_msg, status_code = await self._call_gemini(full_prompt, question)
+        if reply:
+            self.last_gemini_error = None
+            return {
+                "reply": reply,
+                "source": "gemini_rag",
+                "model": GEMINI_MODEL,
+                "sources_used": sources,
+                "chunks_retrieved": len(retrieved_docs),
+                "latency_ms": round((time.time() - t0) * 1000),
+            }
+        self.last_gemini_error = err_msg
+        if err_msg:
+            print(f"⚠️ {err_msg}")
 
         # ── Step 4: Fallback ──────────────────────────────────────
         reply = rule_based_response(question, patient_data)
@@ -327,6 +471,8 @@ class MedicalRAGEngine:
             "source": "rule_based",
             "sources_used": [],
             "chunks_retrieved": len(retrieved_docs),
+            "fallback_reason": self.last_gemini_error or "gemini_unavailable",
+            "upstream_status": status_code,
             "latency_ms": round((time.time() - t0) * 1000),
         }
 
@@ -338,5 +484,8 @@ class MedicalRAGEngine:
             "embedding_model": EMBED_MODEL,
             "generation_model": GEMINI_MODEL,
             "gemini_key_set": bool(self.gemini_key),
+            "gemini_timeout_sec": GEMINI_TIMEOUT_SEC,
+            "gemini_max_retries": GEMINI_MAX_RETRIES,
+            "last_gemini_error": self.last_gemini_error,
             "index_path": str(INDEX_DIR),
         }

@@ -1,8 +1,9 @@
 // src/pages/Patients.jsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Filter } from 'lucide-react';
-import { MOCK_PATIENTS } from '../utils/mockData';
+import { getPatients } from '../utils/api';
+import { EmptyState, PageError, PageLoader } from '../components/PageState';
 
 const SEV_COLOR = { critical:'#ef4444', moderate:'#f59e0b', normal:'#22c55e' };
 
@@ -18,13 +19,62 @@ export default function Patients() {
   const [q, setQ] = useState(searchParams.get('q') || '');
   const [sevFilter, setSevFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [patients, setPatients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const filtered = MOCK_PATIENTS.filter(p => {
+  useEffect(() => {
+    setQ(searchParams.get('q') || '');
+  }, [searchParams]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadPatients() {
+      setLoading(true);
+      setError('');
+      try {
+        const data = await getPatients();
+        if (!active) return;
+        setPatients(data);
+      } catch (err) {
+        if (!active) return;
+        setError('We could not load the patient registry from the backend.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadPatients();
+    return () => { active = false; };
+  }, []);
+
+  const filtered = patients.filter(p => {
     const matchQ = !q || p.name.toLowerCase().includes(q.toLowerCase()) || p.mrn.toLowerCase().includes(q.toLowerCase());
     const matchSev = sevFilter === 'all' || p.severity === sevFilter;
     const matchStatus = statusFilter === 'all' || p.status.toLowerCase() === statusFilter;
     return matchQ && matchSev && matchStatus;
   });
+
+  const severityCounts = {
+    critical: patients.filter(p => p.severity === 'critical').length,
+    moderate: patients.filter(p => p.severity === 'moderate').length,
+    normal: patients.filter(p => p.severity === 'normal').length,
+  };
+
+  if (loading) {
+    return <div className="page-content"><PageLoader title="Loading patients..." subtitle="Fetching the live patient registry and current risk summaries." /></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="page-content">
+        <PageError
+          title="Patients unavailable"
+          subtitle={error}
+          action={<button className="state-action-btn" onClick={() => window.location.reload()}>Retry</button>}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="page-content section-gap">
@@ -55,7 +105,7 @@ export default function Patients() {
 
       {/* Severity summary pills */}
       <div style={{ display:'flex', gap:10 }}>
-        {[['critical',3,'Critical — Immediate Review'],['moderate',3,'Moderate — Monitor'],['normal',2,'Normal — Routine']].map(([s,n,lbl]) => (
+        {[['critical',severityCounts.critical,'Critical — Immediate Review'],['moderate',severityCounts.moderate,'Moderate — Monitor'],['normal',severityCounts.normal,'Normal — Routine']].map(([s,n,lbl]) => (
           <div key={s} onClick={() => setSevFilter(sevFilter === s ? 'all' : s)}
             style={{ flex:1, background:'var(--bg-card)', border:`1px solid ${sevFilter===s ? SEV_COLOR[s] : 'var(--border)'}`, borderRadius:10, padding:'12px 16px', cursor:'pointer', transition:'all 0.15s' }}>
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
@@ -68,6 +118,12 @@ export default function Patients() {
       </div>
 
       {/* Patient cards */}
+      {filtered.length === 0 ? (
+        <EmptyState
+          title="No matching patients"
+          subtitle="Try changing the search or filters, or onboard a new patient to see them here."
+        />
+      ) : (
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(340px, 1fr))', gap:14 }}>
         {filtered.map(p => (
           <div key={p.id} className="card" onClick={() => navigate(`/patients/${p.id}`)}
@@ -104,6 +160,7 @@ export default function Patients() {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

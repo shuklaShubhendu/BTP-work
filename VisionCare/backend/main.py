@@ -20,7 +20,7 @@ MODEL LOADING:
   └───────────────────────────────────────────────────────────────────────────┘
 """
 
-import os, io, json, time, random, tempfile
+import os, io, json, time, sqlite3
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,8 +32,11 @@ from typing import Optional
 MODEL_VERSION  = "V3"
 MODELS_DIR     = Path(__file__).parent / "models"
 IMAGES_DIR     = Path(__file__).parent / "demo_images"
+DATA_DIR       = Path(__file__).parent / "data"
+DB_PATH        = DATA_DIR / "visioncare.db"
 IMAGES_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
 
 # V3 target names
 V3_TARGETS = [
@@ -217,7 +220,7 @@ def run_inference(cxr_path=None, ecg_array=None, labs_dict=None):
 
 
 def mock_inference(labs_dict=None):
-    """Calibrated mock V3 predictions for 8 diseases based on lab values."""
+    """Deterministic fallback predictions for 8 diseases based on lab values."""
     labs = labs_dict or {}
 
     # Base risk calculation from labs
@@ -230,26 +233,26 @@ def mock_inference(labs_dict=None):
     if float(labs.get("glucose",    90)) > 120:  base += 5
     if float(labs.get("wbc",        7.5)) > 11:  base += 8
 
-    # Generate clinically-plausible 8-disease risks
+    # Generate deterministic, clinically-plausible 8-disease risks
     def clamp(v): return min(max(round(v, 1), 2.0), 95.0)
 
     risks = {
-        "mortality":              clamp(base * 0.38 + random.uniform(3, 12)),
-        "heart_failure":          clamp(base * 1.0  + random.uniform(5, 18)),
-        "myocardial_infarction":  clamp(base * 0.25 + random.uniform(2, 8)),
-        "arrhythmia":             clamp(base * 0.45 + random.uniform(5, 15)),
-        "sepsis":                 clamp(base * 0.30 + random.uniform(2, 10)),
-        "pulmonary_embolism":     clamp(base * 0.12 + random.uniform(1, 5)),
-        "acute_kidney_injury":    clamp(base * 0.55 + random.uniform(3, 12)),
-        "icu_admission":          clamp(base * 0.50 + random.uniform(5, 15)),
+        "mortality":              clamp(base * 0.38 + 7),
+        "heart_failure":          clamp(base * 1.0  + 12),
+        "myocardial_infarction":  clamp(base * 0.25 + 4),
+        "arrhythmia":             clamp(base * 0.45 + 8),
+        "sepsis":                 clamp(base * 0.30 + 5),
+        "pulmonary_embolism":     clamp(base * 0.12 + 3),
+        "acute_kidney_injury":    clamp(base * 0.55 + 6),
+        "icu_admission":          clamp(base * 0.50 + 9),
     }
 
     return {
         "risks": risks,
         "gates": {
-            "vision":   round(0.33 + random.uniform(-0.03, 0.03), 4),
-            "signal":   round(0.33 + random.uniform(-0.03, 0.03), 4),
-            "clinical": round(0.34 + random.uniform(-0.03, 0.03), 4),
+            "vision":   0.33,
+            "signal":   0.33,
+            "clinical": 0.34,
         },
         "model_version": "V3",
         "real_inference": False,
@@ -348,12 +351,372 @@ ENCOUNTERS = {
 }
 
 
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def save_patient_record(conn, patient: dict):
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO patients (id, mrn, name, age, gender, status, condition, severity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient["id"], patient["mrn"], patient["name"], int(patient["age"]),
+            patient["gender"], patient["status"], patient["condition"], patient["severity"],
+        ),
+    )
+
+
+def save_encounter_record(conn, patient_id: str, encounter: dict):
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO encounters (
+            id, patient_id, label, date, description, risks_json, gates_json,
+            cxr_findings_json, ecg_findings_json, labs_json, cxr_image,
+            analysis_source, last_inference_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            encounter["id"], patient_id, encounter["label"], encounter["date"], encounter["description"],
+            json.dumps(encounter.get("risks", {})),
+            json.dumps(encounter.get("gates", {})),
+            json.dumps(encounter.get("cxr_findings", [])),
+            json.dumps(encounter.get("ecg_findings", [])),
+            json.dumps(encounter.get("labs", [])),
+            encounter.get("cxr_image", ""),
+            encounter.get("analysis_source", "seeded"),
+            encounter.get("last_inference_at"),
+        ),
+    )
+
+
+def init_db():
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patients (
+                id TEXT PRIMARY KEY,
+                mrn TEXT NOT NULL,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                gender TEXT NOT NULL,
+                status TEXT NOT NULL,
+                condition TEXT NOT NULL,
+                severity TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS encounters (
+                id TEXT PRIMARY KEY,
+                patient_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                date TEXT NOT NULL,
+                description TEXT NOT NULL,
+                risks_json TEXT NOT NULL,
+                gates_json TEXT NOT NULL,
+                cxr_findings_json TEXT NOT NULL,
+                ecg_findings_json TEXT NOT NULL,
+                labs_json TEXT NOT NULL,
+                cxr_image TEXT NOT NULL,
+                analysis_source TEXT DEFAULT 'seeded',
+                last_inference_at TEXT,
+                FOREIGN KEY(patient_id) REFERENCES patients(id)
+            )
+            """
+        )
+
+        patient_count = conn.execute("SELECT COUNT(*) FROM patients").fetchone()[0]
+        if patient_count == 0:
+            for patient in PATIENTS.values():
+                save_patient_record(conn, patient)
+            for patient_id, encounters in ENCOUNTERS.items():
+                for encounter in encounters:
+                    seeded = dict(encounter)
+                    seeded.setdefault("analysis_source", "seeded")
+                    seeded.setdefault("last_inference_at", None)
+                    save_encounter_record(conn, patient_id, seeded)
+            conn.commit()
+
+
+def refresh_cache_from_db():
+    global PATIENTS, ENCOUNTERS
+    with get_db() as conn:
+        patient_rows = conn.execute("SELECT * FROM patients ORDER BY CAST(id AS INTEGER)").fetchall()
+        encounter_rows = conn.execute(
+            """
+            SELECT * FROM encounters
+            ORDER BY patient_id, rowid DESC
+            """
+        ).fetchall()
+
+    PATIENTS = {
+        row["id"]: {
+            "id": row["id"],
+            "mrn": row["mrn"],
+            "name": row["name"],
+            "age": row["age"],
+            "gender": row["gender"],
+            "status": row["status"],
+            "condition": row["condition"],
+            "severity": row["severity"],
+        }
+        for row in patient_rows
+    }
+
+    encounters = {}
+    for row in encounter_rows:
+        encounter = {
+            "id": row["id"],
+            "label": row["label"],
+            "date": row["date"],
+            "description": row["description"],
+            "risks": json.loads(row["risks_json"]),
+            "gates": json.loads(row["gates_json"]),
+            "cxr_findings": json.loads(row["cxr_findings_json"]),
+            "ecg_findings": json.loads(row["ecg_findings_json"]),
+            "labs": json.loads(row["labs_json"]),
+            "cxr_image": row["cxr_image"],
+            "analysis_source": row["analysis_source"] or "seeded",
+            "last_inference_at": row["last_inference_at"],
+        }
+        encounters.setdefault(row["patient_id"], []).append(encounter)
+    ENCOUNTERS = encounters
+
+
 # ─── HELPER ───────────────────────────────────────────────────────────────────
 def resolve_image(filename: str) -> Optional[str]:
     """Return URL if image file exists, else None."""
-    if filename and (IMAGES_DIR / filename).exists():
-        return f"http://127.0.0.1:8000/images/{filename}"
+    if not filename:
+        return None
+
+    image_path = IMAGES_DIR / filename
+    if image_path.exists():
+        return f"http://127.0.0.1:8000/images/{image_path.name}"
+
+    stem = Path(filename).stem
+    for ext in (".png", ".jpg", ".jpeg"):
+        candidate = IMAGES_DIR / f"{stem}{ext}"
+        if candidate.exists():
+            return f"http://127.0.0.1:8000/images/{candidate.name}"
     return None
+
+
+def resolve_image_path(filename: str) -> Optional[Path]:
+    """Return a real filesystem path for an encounter image, trying common extensions."""
+    if not filename:
+        return None
+    direct = IMAGES_DIR / filename
+    if direct.exists():
+        return direct
+    stem = Path(filename).stem
+    for ext in (".png", ".jpg", ".jpeg"):
+        candidate = IMAGES_DIR / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def parse_labs_dict(encounter: dict) -> dict:
+    """Parse encounter lab rows into model input keys with numeric values."""
+    name_map = {
+        "bnp": ["bnp", "b-type natriuretic peptide"],
+        "troponin": ["troponin", "troponin i", "trop", "troponin-i"],
+        "creatinine": ["creatinine", "creat"],
+        "sodium": ["sodium", "na"],
+        "potassium": ["potassium", "k"],
+        "hemoglobin": ["hemoglobin", "hgb", "hb"],
+        "wbc": ["wbc", "white blood cell", "leukocyte"],
+        "glucose": ["glucose", "blood glucose"],
+        "bun": ["bun", "blood urea nitrogen", "urea"],
+        "albumin": ["albumin", "alb"],
+    }
+
+    def parse_value(val_str: str) -> float:
+        import re
+        m = re.search(r"[-+]?\d*\.?\d+", str(val_str))
+        return float(m.group()) if m else 0.0
+
+    parsed = {}
+    for lab in encounter.get("labs", []):
+        name_lower = lab.get("name", "").lower().strip()
+        val = parse_value(lab.get("value", "0"))
+        for key, aliases in name_map.items():
+            if any(alias in name_lower for alias in aliases):
+                parsed[key] = val
+                break
+    return parsed
+
+
+def classify_severity(risks: dict) -> str:
+    """Derive a simple severity bucket from the two primary risk scores."""
+    hf = float((risks or {}).get("heart_failure", 0) or 0)
+    mortality = float((risks or {}).get("mortality", 0) or 0)
+    if hf >= 70 or mortality >= 40:
+        return "critical"
+    if hf >= 40 or mortality >= 20:
+        return "moderate"
+    return "normal"
+
+
+def enrich_patient(patient_id: str) -> dict:
+    """Return a copy of a patient with the latest encounter summary attached."""
+    patient = PATIENTS.get(patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient not found")
+
+    enriched = dict(patient)
+    encs = ENCOUNTERS.get(patient_id, [])
+    if encs:
+        latest = encs[0]
+        enriched["risks"] = latest.get("risks", {})
+        enriched["gates"] = latest.get("gates", {})
+        enriched["hf_risk"] = latest.get("risks", {}).get("heart_failure", 0)
+        enriched["mortality_risk"] = latest.get("risks", {}).get("mortality", 0)
+        enriched["last_encounter"] = latest.get("date")
+        enriched["cxr_image"] = resolve_image(latest.get("cxr_image", ""))
+    else:
+        enriched["risks"] = {}
+        enriched["gates"] = {}
+        enriched["hf_risk"] = 0
+        enriched["mortality_risk"] = 0
+        enriched["last_encounter"] = None
+        enriched["cxr_image"] = None
+    return enriched
+
+
+def bootstrap_live_inference_for_all():
+    """
+    Refresh every stored encounter once at startup.
+    Persists model-backed or deterministic-estimate results into SQLite.
+    """
+    refresh_cache_from_db()
+    total = 0
+    model_count = 0
+    estimate_count = 0
+
+    with get_db() as conn:
+        for patient_id, encs in ENCOUNTERS.items():
+            for enc in encs:
+                labs_dict = parse_labs_dict(enc)
+                cxr_path_obj = resolve_image_path(enc.get("cxr_image", ""))
+                cxr_path = str(cxr_path_obj) if cxr_path_obj else None
+                result = run_inference(cxr_path=cxr_path, labs_dict=labs_dict)
+
+                updated = dict(enc)
+                updated["risks"] = result.get("risks", {})
+                updated["gates"] = result.get("gates", {})
+                updated["analysis_source"] = "model" if result.get("real_inference") else "deterministic_estimate"
+                updated["last_inference_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                save_encounter_record(conn, patient_id, updated)
+
+                total += 1
+                if updated["analysis_source"] == "model":
+                    model_count += 1
+                else:
+                    estimate_count += 1
+        conn.commit()
+
+    refresh_cache_from_db()
+    print(
+        f"✅ Startup inference refresh complete — {total} encounters "
+        f"({model_count} model, {estimate_count} deterministic estimate)"
+    )
+
+
+def build_labs_display(labs_dict: dict) -> list:
+    """Convert raw lab values into display objects used by the frontend."""
+    configs = [
+        ("bnp", "BNP", "pg/mL", "<100", lambda v: "Critical" if v > 400 else "High" if v > 100 else "Normal"),
+        ("troponin", "Troponin I", "ng/mL", "<0.04", lambda v: "Critical" if v > 0.04 else "Normal"),
+        ("creatinine", "Creatinine", "mg/dL", "0.7-1.3", lambda v: "Critical" if v > 2.0 else "High" if v > 1.3 else "Normal"),
+        ("sodium", "Sodium", "mEq/L", "136-145", lambda v: "Critical" if v < 130 else "Low" if v < 136 else "Normal"),
+        ("potassium", "Potassium", "mEq/L", "3.5-5.0", lambda v: "High" if v > 5.0 else "Low" if v < 3.5 else "Normal"),
+        ("hemoglobin", "Hemoglobin", "g/dL", "12-17.5", lambda v: "Low" if v < 12 else "Normal"),
+        ("wbc", "WBC", "x10^3/uL", "4.5-11.0", lambda v: "High" if v > 11 else "Low" if v < 4.5 else "Normal"),
+        ("glucose", "Glucose", "mg/dL", "70-100", lambda v: "High" if v > 120 else "Normal"),
+    ]
+
+    display = []
+    for key, label, unit, normal, classify in configs:
+        if key not in labs_dict:
+            continue
+        value = float(labs_dict[key])
+        display.append({
+            "name": label,
+            "value": f"{value:g} {unit}",
+            "normal": normal,
+            "status": classify(value),
+        })
+    return display
+
+
+def generate_ecg_findings(has_ecg: bool, risks: dict) -> list:
+    """Return lightweight ECG findings for demo and onboarding flows."""
+    if not has_ecg:
+        return ["ECG not provided"]
+    if float((risks or {}).get("arrhythmia", 0) or 0) >= 40:
+        return ["Atrial fibrillation pattern", "Rate variability noted", "Left ventricular strain"]
+    if float((risks or {}).get("myocardial_infarction", 0) or 0) >= 30:
+        return ["ST-segment changes", "Anterior lead abnormalities"]
+    return ["Normal sinus rhythm", "No major acute abnormalities detected"]
+
+
+def save_uploaded_cxr(patient_id: str, encounter_id: str, file: UploadFile | None) -> Optional[str]:
+    """Persist an uploaded CXR image under the demo_images directory."""
+    if file is None:
+        return None
+
+    suffix = Path(file.filename or "").suffix.lower() or ".png"
+    if suffix not in {".png", ".jpg", ".jpeg"}:
+        suffix = ".png"
+    filename = f"p{patient_id}_{encounter_id}{suffix}"
+    destination = IMAGES_DIR / filename
+    contents = file.file.read()
+    if contents:
+        destination.write_bytes(contents)
+        return filename
+    return None
+
+
+class AnalyzeRequest(BaseModel):
+    labs: dict = {}
+    has_ecg: bool = False
+    mode: str = "multimodal"   # multimodal | cxr | ecg | labs
+
+
+class PatientCreateRequest(BaseModel):
+    name: str
+    age: int
+    gender: str = "Male"
+    condition: str = ""
+    status: str = "Active"
+    labs: dict = {}
+    has_ecg: bool = False
+
+
+class ChatRequest(BaseModel):
+    message: str
+    patient_id: Optional[str] = None
+    encounter_id: Optional[str] = None
+    # Optional inline patient context (for onboarding flow where patient isn't in DB)
+    patient_name: Optional[str] = None
+    patient_age: Optional[int] = None
+    patient_gender: Optional[str] = None
+    risks: Optional[dict] = None
+    gates: Optional[dict] = None
+    cxr_findings: Optional[list] = None
+    ecg_findings: Optional[list] = None
+    labs_data: Optional[list] = None
+
+
+init_db()
+refresh_cache_from_db()
+bootstrap_live_inference_for_all()
 
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
@@ -364,47 +727,81 @@ def root():
 
 @app.get("/api/stats")
 def stats():
-    return {"total_patients": 10842, "high_risk_hf": 2341,
-            "critical_cases": 156, "predictions_today": 89,
+    refresh_cache_from_db()
+    enriched = [enrich_patient(pid) for pid in PATIENTS]
+    total_patients = len(enriched)
+    high_risk_hf = sum(1 for p in enriched if p.get("hf_risk", 0) >= 70)
+    critical_cases = sum(1 for p in enriched if p.get("severity") == "critical")
+    predictions_today = sum(len(encs) for encs in ENCOUNTERS.values())
+    return {"total_patients": total_patients, "high_risk_hf": high_risk_hf,
+            "critical_cases": critical_cases, "predictions_today": predictions_today,
             "model_version": MODEL_VERSION, "model_loaded": _model_loaded,
             "targets": V3_TARGETS, "num_targets": 8}
 
 @app.get("/api/patients")
 def get_patients(search: str = ""):
-    pts = list(PATIENTS.values())
+    refresh_cache_from_db()
+    pts = [enrich_patient(pid) for pid in sorted(PATIENTS.keys(), key=lambda pid: int(pid), reverse=True)]
     if search:
         pts = [p for p in pts if search.lower() in p["name"].lower()
                or search.lower() in p["mrn"].lower()]
-    # Attach latest encounter risk scores
-    for p in pts:
-        encs = ENCOUNTERS.get(p["id"], [])
-        if encs:
-            latest = encs[0]
-            p["risks"]          = latest.get("risks", {})
-            p["gates"]          = latest.get("gates", {})
-            p["hf_risk"]        = latest["risks"].get("heart_failure", 0)
-            p["mortality_risk"] = latest["risks"].get("mortality", 0)
-            p["last_encounter"] = latest["date"]
-            p["cxr_image"]      = resolve_image(latest.get("cxr_image",""))
     return pts
 
 @app.get("/api/patients/{patient_id}")
 def get_patient(patient_id: str):
-    p = PATIENTS.get(patient_id)
-    if not p: raise HTTPException(404, "Patient not found")
-    p = dict(p)
-    encs = ENCOUNTERS.get(patient_id, [])
-    if encs:
-        latest = encs[0]
-        p["risks"]          = latest.get("risks", {})
-        p["gates"]          = latest.get("gates", {})
-        p["hf_risk"]        = latest["risks"].get("heart_failure", 0)
-        p["mortality_risk"] = latest["risks"].get("mortality", 0)
-        p["last_encounter"] = latest["date"]
-    return p
+    refresh_cache_from_db()
+    return enrich_patient(patient_id)
+
+
+@app.post("/api/patients")
+def create_patient(req: PatientCreateRequest):
+    """Create a patient plus an initial encounter from onboarding data."""
+    refresh_cache_from_db()
+    patient_id = str(max((int(pid) for pid in PATIENTS.keys()), default=0) + 1)
+    encounter_id = f"e{len(ENCOUNTERS.get(patient_id, [])) + 1:03d}"
+    result = run_inference(labs_dict=req.labs or {})
+
+    severity = classify_severity(result.get("risks", {}))
+    patient = {
+        "id": patient_id,
+        "mrn": f"MRN-{100000 + int(patient_id):06d}",
+        "name": req.name.strip(),
+        "age": req.age,
+        "gender": req.gender,
+        "status": req.status,
+        "condition": req.condition.strip() or "New patient onboarding",
+        "severity": severity,
+    }
+    PATIENTS[patient_id] = patient
+
+    encounter = {
+        "id": encounter_id,
+        "label": encounter_id.upper(),
+        "date": time.strftime("%d %b %Y"),
+        "description": patient["condition"],
+        "risks": result.get("risks", {}),
+        "gates": result.get("gates", {}),
+        "cxr_findings": ["Chest X-ray not uploaded"],
+        "ecg_findings": generate_ecg_findings(req.has_ecg, result.get("risks", {})),
+        "cxr_image": "",
+        "labs": build_labs_display(req.labs or {}),
+        "analysis_source": "model" if result.get("real_inference") else "deterministic_estimate",
+        "last_inference_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with get_db() as conn:
+        save_patient_record(conn, patient)
+        save_encounter_record(conn, patient_id, encounter)
+        conn.commit()
+    refresh_cache_from_db()
+    return {
+        "patient": enrich_patient(patient_id),
+        "encounter": dict(encounter, patient=patient, cxr_image_url=None),
+        "created": True,
+    }
 
 @app.get("/api/patients/{patient_id}/encounters")
 def get_encounters(patient_id: str):
+    refresh_cache_from_db()
     encs = ENCOUNTERS.get(patient_id, [])
     result = []
     for e in encs:
@@ -415,6 +812,7 @@ def get_encounters(patient_id: str):
 
 @app.get("/api/patients/{patient_id}/encounters/{encounter_id}")
 def get_encounter(patient_id: str, encounter_id: str):
+    refresh_cache_from_db()
     encs = ENCOUNTERS.get(patient_id, [])
     enc = next((e for e in encs if e["id"] == encounter_id), None)
     if not enc: raise HTTPException(404, "Encounter not found")
@@ -456,25 +854,6 @@ def model_info():
 
 # ─── V3 PREDICTION ENDPOINTS ─────────────────────────────────────────────────
 
-class AnalyzeRequest(BaseModel):
-    labs: dict = {}
-    has_ecg: bool = False
-    mode: str = "multimodal"   # multimodal | cxr | ecg | labs
-
-class ChatRequest(BaseModel):
-    message: str
-    patient_id: Optional[str] = None
-    encounter_id: Optional[str] = None
-    # Optional inline patient context (for onboarding flow where patient isn't in DB)
-    patient_name: Optional[str] = None
-    patient_age: Optional[int] = None
-    patient_gender: Optional[str] = None
-    risks: Optional[dict] = None
-    gates: Optional[dict] = None
-    cxr_findings: Optional[list] = None
-    ecg_findings: Optional[list] = None
-    labs_data: Optional[list] = None
-
 @app.post("/api/analyze")
 def analyze(req: AnalyzeRequest):
     """Run V3 multi-modal inference (8 diseases + gate weights)."""
@@ -482,6 +861,85 @@ def analyze(req: AnalyzeRequest):
     result = run_inference(labs_dict=req.labs)
     result["latency_ms"] = round((time.time() - start) * 1000, 1)
     return result
+
+
+@app.post("/api/onboard")
+async def onboard_patient(
+    name: str = Form(...),
+    age: int = Form(...),
+    gender: str = Form("Male"),
+    condition: str = Form(""),
+    status: str = Form("Active"),
+    has_ecg: bool = Form(False),
+    labs_json: str = Form("{}"),
+    cxr_file: UploadFile | None = File(None),
+):
+    """Create a patient from the onboarding wizard and persist the first encounter."""
+    refresh_cache_from_db()
+    try:
+        labs = json.loads(labs_json or "{}")
+        if not isinstance(labs, dict):
+            raise ValueError("labs_json must decode to an object")
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid labs_json payload: {exc}") from exc
+
+    patient_id = str(max((int(pid) for pid in PATIENTS.keys()), default=0) + 1)
+    encounter_id = f"e{100 + int(patient_id):03d}"
+
+    cxr_filename = save_uploaded_cxr(patient_id, encounter_id, cxr_file)
+    cxr_path = str(IMAGES_DIR / cxr_filename) if cxr_filename else None
+
+    start = time.time()
+    result = run_inference(cxr_path=cxr_path, labs_dict=labs)
+    latency_ms = round((time.time() - start) * 1000, 1)
+
+    severity = classify_severity(result.get("risks", {}))
+    patient = {
+        "id": patient_id,
+        "mrn": f"MRN-{100000 + int(patient_id):06d}",
+        "name": name.strip(),
+        "age": age,
+        "gender": gender,
+        "status": status,
+        "condition": condition.strip() or "New patient onboarding",
+        "severity": severity,
+    }
+    PATIENTS[patient_id] = patient
+
+    encounter = {
+        "id": encounter_id,
+        "label": encounter_id.upper(),
+        "date": time.strftime("%d %b %Y"),
+        "description": patient["condition"],
+        "risks": result.get("risks", {}),
+        "gates": result.get("gates", {}),
+        "cxr_findings": ["Uploaded chest X-ray available"] if cxr_filename else ["Chest X-ray not uploaded"],
+        "ecg_findings": generate_ecg_findings(has_ecg, result.get("risks", {})),
+        "cxr_image": cxr_filename or "",
+        "labs": build_labs_display(labs),
+        "analysis_source": "model" if result.get("real_inference") else "deterministic_estimate",
+        "last_inference_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with get_db() as conn:
+        save_patient_record(conn, patient)
+        save_encounter_record(conn, patient_id, encounter)
+        conn.commit()
+    refresh_cache_from_db()
+
+    return {
+        "patient": enrich_patient(patient_id),
+        "encounter": dict(encounter, patient=patient, cxr_image_url=resolve_image(encounter["cxr_image"])),
+        "result": {
+            **result,
+            "latency_ms": latency_ms,
+            "inputs_used": {
+                "cxr": bool(cxr_filename),
+                "ecg": bool(has_ecg),
+                "labs": len(labs),
+            },
+        },
+        "created": True,
+    }
 
 @app.post("/api/predict/{encounter_id}")
 def predict_encounter(encounter_id: str):
@@ -492,6 +950,7 @@ def predict_encounter(encounter_id: str):
     """
 
     # ── 1. Find the encounter ────────────────────────────────────────────────
+    refresh_cache_from_db()
     enc = None
     pid = None
     for p, encs in ENCOUNTERS.items():
@@ -505,57 +964,40 @@ def predict_encounter(encounter_id: str):
         raise HTTPException(404, "Encounter not found")
 
     # ── 2. Parse labs list → dict ────────────────────────────────────────────
-    # Encounter labs are stored as [{"name":"BNP", "value":"420 pg/mL", ...}]
-    # Map display names → model keys and strip units
-    NAME_MAP = {
-        "bnp":          ["bnp", "b-type natriuretic peptide"],
-        "troponin":     ["troponin", "troponin i", "trop", "troponin-i"],
-        "creatinine":   ["creatinine", "creat"],
-        "sodium":       ["sodium", "na"],
-        "potassium":    ["potassium", "k"],
-        "hemoglobin":   ["hemoglobin", "hgb", "hb"],
-        "wbc":          ["wbc", "white blood cell", "leukocyte"],
-        "glucose":      ["glucose", "blood glucose"],
-        "bun":          ["bun", "blood urea nitrogen", "urea"],
-        "albumin":      ["albumin", "alb"],
-    }
-
-    def parse_value(val_str: str) -> float:
-        """Extract numeric part from strings like '420 pg/mL' or '1.4 mg/dL'."""
-        import re
-        m = re.search(r"[-+]?\d*\.?\d+", str(val_str))
-        return float(m.group()) if m else 0.0
-
-    labs_dict = {}
-    for lab in enc.get("labs", []):
-        name_lower = lab.get("name", "").lower().strip()
-        val = parse_value(lab.get("value", "0"))
-        for key, aliases in NAME_MAP.items():
-            if any(alias in name_lower for alias in aliases):
-                labs_dict[key] = val
-                break
+    labs_dict = parse_labs_dict(enc)
 
     # ── 3. Resolve CXR path ──────────────────────────────────────────────────
     cxr_image = enc.get("cxr_image", "")
-    cxr_path = str(IMAGES_DIR / cxr_image) if cxr_image else None
-    # Only use CXR if the file actually exists on disk
-    if cxr_path and not Path(cxr_path).exists():
-        cxr_path = None
+    resolved_cxr = resolve_image_path(cxr_image)
+    cxr_path = str(resolved_cxr) if resolved_cxr else None
 
     # ── 4. Run inference ─────────────────────────────────────────────────────
     start = time.time()
     result = run_inference(cxr_path=cxr_path, labs_dict=labs_dict)
     latency = round((time.time() - start) * 1000, 1)
 
+    updated_encounter = dict(enc)
+    updated_encounter["risks"] = result["risks"]
+    updated_encounter["gates"] = result.get("gates", {})
+    updated_encounter["analysis_source"] = "model" if result.get("real_inference") else "deterministic_estimate"
+    updated_encounter["last_inference_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    updated_encounter["cxr_image"] = enc.get("cxr_image", "")
+    with get_db() as conn:
+        save_encounter_record(conn, pid, updated_encounter)
+        conn.commit()
+    refresh_cache_from_db()
+
     return {
         "prediction_id":  f"pred_{encounter_id}_{int(time.time())}",
         "encounter_id":   encounter_id,
         "patient_id":     pid,
         "model_version":  "V3",
-        "risks":          result["risks"],
-        "gates":          result.get("gates", {}),
+        "risks":          updated_encounter["risks"],
+        "gates":          updated_encounter.get("gates", {}),
         "real_inference": result.get("real_inference", False),
         "latency_ms":     latency,
+        "analysis_source": updated_encounter["analysis_source"],
+        "last_inference_at": updated_encounter["last_inference_at"],
         "inputs_used": {
             "cxr":  cxr_path is not None,
             "ecg":  False,
@@ -691,6 +1133,7 @@ async def chat(req: ChatRequest):
     3. Calls Gemini 2.5 Flash for grounded generation
     4. Falls back to rule-based responses if unavailable
     """
+    refresh_cache_from_db()
     # Build patient context from either DB lookup or inline data
     patient_data = {}
 
@@ -712,6 +1155,8 @@ async def chat(req: ChatRequest):
             "cxr_findings": enc.get("cxr_findings", []),
             "ecg_findings": enc.get("ecg_findings", []),
             "labs": enc.get("labs", []),
+            "analysis_source": enc.get("analysis_source"),
+            "last_inference_at": enc.get("last_inference_at"),
         }
     else:
         # Use inline data from request (onboarding flow)

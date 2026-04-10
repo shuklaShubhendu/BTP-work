@@ -91,16 +91,26 @@ export default function About() {
       <div className="card" style={{ textAlign:'center' }}>
         <div className="card-title" style={{ marginBottom:4 }}>Research Team</div>
         <div style={{ fontSize:13, color:'var(--text-secondary)', marginBottom:16 }}>B.Tech Computer Science & Engineering, Semester 7 — IIIT Kottayam</div>
-        <div style={{ display:'flex', justifyContent:'center', gap:24 }}>
-          {['Arjun Mehta','Priya Krishnan','Rahul Nair'].map(name => (
-            <div key={name} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
-              <div style={{ width:48, height:48, borderRadius:'50%', background:'var(--green-dim)', border:'1px solid var(--green-border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:700, color:'var(--green)' }}>
-                {name[0]}
+        <div style={{ display:'flex', flexWrap:'wrap', justifyContent:'center', gap:20, marginBottom:18 }}>
+          {[
+            { name: 'Shubhendu Shukla', roll: '2022BCD0054' },
+            { name: 'Aditi Saugat', roll: '2022BCS0200' },
+            { name: 'Duggammagari Jayanth Kumar Reddy', roll: '2022BCD0042' },
+            { name: 'B Akash', roll: '2022BCS0087' },
+          ].map((member) => (
+            <div key={member.roll} style={{ width:220, display:'flex', flexDirection:'column', alignItems:'center', gap:8, padding:'10px 12px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg-elevated)' }}>
+              <div style={{ width:56, height:56, borderRadius:'50%', background:'var(--green-dim)', border:'1px solid var(--green-border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, fontWeight:700, color:'var(--green)' }}>
+                {member.name.split(' ').map((x) => x[0]).join('').slice(0, 2)}
               </div>
-              <div style={{ fontSize:12, fontWeight:600 }}>{name}</div>
+              <div style={{ fontSize:13, fontWeight:700, lineHeight:1.35 }}>{member.name}</div>
+              <div style={{ fontSize:12, color:'var(--text-secondary)' }}>{member.roll}</div>
               <div style={{ fontSize:11, color:'var(--text-muted)' }}>BTP Researcher</div>
             </div>
           ))}
+        </div>
+        <div style={{ margin:'0 auto', maxWidth:360, border:'1px solid var(--green-border)', background:'var(--green-dim)', borderRadius:12, padding:'12px 14px' }}>
+          <div style={{ fontSize:12, color:'var(--text-secondary)', textTransform:'uppercase', letterSpacing:'0.08em' }}>Guided By</div>
+          <div style={{ fontSize:24, fontWeight:700, marginTop:4 }}>Dr. Dhakshayani J</div>
         </div>
       </div>
     </div>

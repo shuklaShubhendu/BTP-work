@@ -7,3 +7,4 @@ numpy==1.26.4
 # PyTorch CPU — ~800MB image but enables real V3 inference
 torch==2.1.0+cpu
 torchvision==0.16.0+cpu
+google-generativeai==0.7.2

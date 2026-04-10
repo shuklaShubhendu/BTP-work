@@ -4,13 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { Heart, Eye, EyeOff } from 'lucide-react';
 
 export default function Login({ onLogin }) {
-  const [email, setEmail]   = useState('doctor@hospital.org');
-  const [pw, setPw]         = useState('password');
+  const [email, setEmail]   = useState('');
+  const [pw, setPw]         = useState('');
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async () => {
+    if (!email.trim() || !pw.trim()) return;
     setLoading(true);
     await new Promise(r => setTimeout(r, 600));
     onLogin();
@@ -43,7 +44,7 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
-        <button className="login-btn" onClick={handleLogin} disabled={loading}>
+        <button className="login-btn" onClick={handleLogin} disabled={loading || !email.trim() || !pw.trim()}>
           {loading ? 'Signing in...' : 'Sign In'}
         </button>
         <div className="login-footer">Clinical Decision Support System — IIIT Kottayam</div>

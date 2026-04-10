@@ -1,15 +1,57 @@
 // src/pages/PatientProfile.jsx
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Calendar } from 'lucide-react';
-import { MOCK_PATIENTS, MOCK_ENCOUNTERS } from '../utils/mockData';
+import { getEncounters, getPatient } from '../utils/api';
+import { EmptyState, PageError, PageLoader } from '../components/PageState';
 
 export default function PatientProfile() {
   const { patientId } = useParams();
   const navigate = useNavigate();
-  const patient = MOCK_PATIENTS.find(p => p.id === patientId);
-  const encounters = MOCK_ENCOUNTERS[patientId] || [];
+  const [patient, setPatient] = useState(null);
+  const [encounters, setEncounters] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  if (!patient) return <div className="loading">Patient not found.</div>;
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const [patientData, encounterData] = await Promise.all([
+          getPatient(patientId),
+          getEncounters(patientId),
+        ]);
+        if (!active) return;
+        setPatient(patientData);
+        setEncounters(encounterData);
+      } catch (err) {
+        if (!active) return;
+        setError('We could not load this patient from the backend.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [patientId]);
+
+  if (loading) {
+    return <div className="page-content"><PageLoader title="Loading patient profile..." subtitle="Syncing demographics, encounters, and latest risk information." /></div>;
+  }
+
+  if (error || !patient) {
+    return (
+      <div className="page-content">
+        <PageError
+          title="Patient not found"
+          subtitle={error || 'This patient could not be loaded.'}
+          action={<button className="state-action-btn" onClick={() => navigate('/patients')}>Back to Patients</button>}
+        />
+      </div>
+    );
+  }
 
   const getBadge = (hf) => {
     const cls = hf >= 70 ? 'badge-critical' : hf >= 40 ? 'badge-high' : 'badge-low';
@@ -68,6 +110,9 @@ export default function PatientProfile() {
       {/* Encounter History */}
       <div>
         <div className="card-title" style={{ marginBottom:12 }}>Encounter History</div>
+        {encounters.length === 0 ? (
+          <EmptyState title="No encounters yet" subtitle="This patient has been created, but no encounter analysis has been saved yet." />
+        ) : (
         <div className="section-gap">
           {encounters.map(enc => (
             <div key={enc.id} className="enc-card" onClick={() => navigate(`/patients/${patientId}/encounters/${enc.id}`)}>
@@ -85,6 +130,7 @@ export default function PatientProfile() {
             </div>
           ))}
         </div>
+        )}
       </div>
 
       {/* Quick stats from latest encounter */}

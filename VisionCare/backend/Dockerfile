@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir torch==2.1.0+cpu torchvision==0.16.0+cpu \
 RUN pip install --no-cache-dir fastapi==0.115.0 uvicorn[standard]==0.30.6 \
     pydantic==2.9.2 python-multipart==0.0.9 Pillow==10.4.0 numpy==1.26.4
 
-# RAG dependencies: FAISS + LangChain + embeddings + Gemini HTTP client
+# RAG dependencies: FAISS + LangChain + embeddings + Gemini SDK
 RUN pip install --no-cache-dir \
     faiss-cpu==1.8.0 \
     langchain==0.2.16 \
@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir \
     sentence-transformers==2.7.0 \
     transformers==4.40.2 \
     pypdf==4.3.1 \
-    httpx==0.27.2
+    google-generativeai==0.7.2
 
 # Copy backend source
 COPY . .

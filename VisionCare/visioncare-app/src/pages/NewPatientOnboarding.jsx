@@ -1,14 +1,15 @@
 // src/pages/NewPatientOnboarding.jsx — 3-Step Patient Onboarding Wizard
 import { useState, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   UserPlus, Upload, CheckCircle, ChevronRight, ChevronLeft,
-  Zap, RotateCcw, User, Calendar, Heart, FileText, ArrowRight
+  Zap, RotateCcw, User, Heart, FileText
 } from 'lucide-react';
 import RiskGauge from '../components/RiskGauge';
 import ECGViewer from '../components/ECGViewer';
 import CXRViewer from '../components/CXRViewer';
 import { V3_TARGETS } from '../utils/mockData';
-import { analyze as analyzeAPI, analyzeCxr } from '../utils/api';
+import { onboardPatient } from '../utils/api';
 
 /* ─── Lab Configuration ────────────────────────────────────────────────────── */
 const LAB_CONFIG = [
@@ -23,22 +24,6 @@ const LAB_CONFIG = [
 ];
 
 const DEFAULT_LABS = { bnp:'', troponin:'', creatinine:'', sodium:'', potassium:'', hemoglobin:'', wbc:'', glucose:'' };
-
-/* ─── Mock fallback ────────────────────────────────────────────────────────── */
-function mockPredict(labs, hasCxr, hasEcg) {
-  const score = (k, d) => { const v = parseFloat(labs[k]); return isNaN(v) ? 0 : v > d ? 15 : 0; };
-  const base = score('bnp',400) + score('troponin',0.04) + score('creatinine',1.5) + (hasCxr?12:0) + (hasEcg?10:0);
-  const cl = v => Math.min(Math.max(Math.round(v), 2), 95);
-  return {
-    risks: {
-      mortality: cl(base*0.38+Math.random()*8), heart_failure: cl(base*1.0+Math.random()*12),
-      myocardial_infarction: cl(base*0.25+Math.random()*6), arrhythmia: cl(base*0.45+Math.random()*10),
-      sepsis: cl(base*0.30+Math.random()*8), pulmonary_embolism: cl(base*0.12+Math.random()*4),
-      acute_kidney_injury: cl(base*0.55+Math.random()*10), icu_admission: cl(base*0.50+Math.random()*10),
-    },
-    gates: { vision: 0.34, signal: 0.34, clinical: 0.32 },
-  };
-}
 
 /* ─── Step Indicator ───────────────────────────────────────────────────────── */
 function StepIndicator({ current, steps }) {
@@ -60,10 +45,11 @@ function StepIndicator({ current, steps }) {
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 export default function NewPatientOnboarding() {
+  const navigate = useNavigate();
   const [step, setStep] = useState(0);
 
   /* Step 1: Patient Info */
-  const [patient, setPatient] = useState({ name:'', age:'', gender:'Male', condition:'', mrn: `MRN-${String(Math.floor(Math.random()*90000)+10000)}` });
+  const [patient, setPatient] = useState({ name:'', age:'', gender:'Male', condition:'', status:'Active' });
 
   /* Step 2: Clinical Data */
   const [labs, setLabs]       = useState(DEFAULT_LABS);
@@ -74,6 +60,8 @@ export default function NewPatientOnboarding() {
 
   /* Step 3: Results */
   const [result, setResult]   = useState(null);
+  const [createdPatient, setCreatedPatient] = useState(null);
+  const [createdEncounter, setCreatedEncounter] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
 
@@ -104,20 +92,19 @@ export default function NewPatientOnboarding() {
     );
 
     try {
-      let res;
-      if (cxrFile && Object.keys(cleanLabs).length > 0) {
-        // Full fusion: send labs via analyze, CXR separately
-        res = await analyzeAPI({ labs: cleanLabs, has_ecg: hasEcg, mode: 'multimodal' });
-      } else if (cxrFile) {
-        res = await analyzeCxr(cxrFile);
-      } else {
-        res = await analyzeAPI({ labs: cleanLabs, has_ecg: hasEcg, mode: Object.keys(cleanLabs).length ? 'labs' : 'multimodal' });
-      }
-      setResult(res);
+      const res = await onboardPatient({
+        patient,
+        labs: cleanLabs,
+        hasEcg,
+        cxrFile,
+      });
+      setCreatedPatient(res.patient);
+      setCreatedEncounter(res.encounter);
+      setResult(res.result);
     } catch (err) {
-      console.warn('Backend unavailable — using mock:', err.message);
-      setResult(mockPredict(labs, !!cxrFile, hasEcg));
-      setError('Backend unavailable — showing estimated results.');
+      console.warn('Backend unavailable:', err.message);
+      setError('We could not save this patient to the backend. Please start the API and try again.');
+      setResult(null);
     } finally {
       setLoading(false);
     }
@@ -126,11 +113,12 @@ export default function NewPatientOnboarding() {
   /* ── Reset everything ────────────────────────────────────────────────────── */
   const resetAll = () => {
     setStep(0);
-    setPatient({ name:'', age:'', gender:'Male', condition:'', mrn: `MRN-${String(Math.floor(Math.random()*90000)+10000)}` });
+    setPatient({ name:'', age:'', gender:'Male', condition:'', status:'Active' });
     setLabs(DEFAULT_LABS);
     setCxrFile(null); setCxrUrl(null);
     setHasEcg(false);
     setResult(null); setLoading(false); setError(null);
+    setCreatedPatient(null); setCreatedEncounter(null);
   };
 
   /* ── Derived ─────────────────────────────────────────────────────────────── */
@@ -196,8 +184,11 @@ export default function NewPatientOnboarding() {
             </div>
 
             <div className="onboard-field">
-              <label>MRN</label>
-              <input type="text" value={patient.mrn} readOnly style={{ opacity:0.6, cursor:'default' }} />
+              <label>Status</label>
+              <select value={patient.status} onChange={e => setPatient(p => ({...p, status: e.target.value}))}>
+                <option>Active</option>
+                <option>Discharged</option>
+              </select>
             </div>
 
             <div className="onboard-field full-width">
@@ -227,7 +218,7 @@ export default function NewPatientOnboarding() {
             <div>
               <div style={{ fontWeight:700, fontSize:14 }}>{patient.name}</div>
               <div style={{ fontSize:12, color:'var(--text-secondary)' }}>
-                {patient.age} yrs · {patient.gender} · {patient.mrn}
+                {patient.age} yrs · {patient.gender} · {patient.status}
                 {patient.condition && <> · {patient.condition}</>}
               </div>
             </div>
@@ -331,7 +322,7 @@ export default function NewPatientOnboarding() {
             <div style={{ flex:1 }}>
               <div style={{ fontWeight:700, fontSize:14 }}>{patient.name}</div>
               <div style={{ fontSize:12, color:'var(--text-secondary)' }}>
-                {patient.age} yrs · {patient.gender} · {patient.mrn}
+                {patient.age} yrs · {patient.gender} · {(createdPatient?.mrn || 'Assigning MRN...')}
                 {patient.condition && <> · {patient.condition}</>}
               </div>
             </div>
@@ -357,12 +348,6 @@ export default function NewPatientOnboarding() {
             </div>
           ) : result ? (
             <>
-              {error && (
-                <div style={{ background:'rgba(245,158,11,0.08)', border:'1px solid rgba(245,158,11,0.2)', borderRadius:10, padding:'10px 16px', fontSize:12, color:'var(--text-amber)', marginBottom:10 }}>
-                  ⚠️ {error}
-                </div>
-              )}
-
               {/* Risk Gauges */}
               <div className="onboard-card">
                 <div className="onboard-card-header">
@@ -419,12 +404,23 @@ export default function NewPatientOnboarding() {
                 <button className="onboard-back-btn" onClick={() => setStep(1)}>
                   <ChevronLeft size={16} /> Modify Data
                 </button>
-                <button className="onboard-next-btn" onClick={resetAll}>
-                  <UserPlus size={16} style={{ marginRight:6 }} /> Onboard Another Patient
-                </button>
+                <div style={{ display:'flex', gap:10 }}>
+                  {createdPatient && createdEncounter && (
+                    <button className="onboard-back-btn" onClick={() => navigate(`/patients/${createdPatient.id}/encounters/${createdEncounter.id}`)}>
+                      View Encounter
+                    </button>
+                  )}
+                  <button className="onboard-next-btn" onClick={createdPatient ? () => navigate(`/patients/${createdPatient.id}`) : resetAll}>
+                    <UserPlus size={16} style={{ marginRight:6 }} /> {createdPatient ? 'Open Patient Record' : 'Onboard Another Patient'}
+                  </button>
+                </div>
               </div>
             </>
-          ) : null}
+          ) : (
+            <div style={{ background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.2)', borderRadius:10, padding:'14px 16px', fontSize:12, color:'var(--text-red)' }}>
+              {error || 'We could not complete the onboarding request.'}
+            </div>
+          )}
         </div>
       )}
     </div>

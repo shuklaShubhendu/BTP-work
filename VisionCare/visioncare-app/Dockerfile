@@ -4,17 +4,10 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Accept Gemini key as build arg
-ARG VITE_GEMINI_KEY=""
-ENV VITE_GEMINI_KEY=$VITE_GEMINI_KEY
-
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 COPY . .
-
-# Write the .env file with build arg
-RUN echo "VITE_GEMINI_KEY=${VITE_GEMINI_KEY}" > .env
 
 RUN npm run build
 

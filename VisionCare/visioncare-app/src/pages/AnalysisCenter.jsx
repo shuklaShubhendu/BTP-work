@@ -21,40 +21,6 @@ const LAB_CONFIG = [
   { key:'glucose',    label:'Glucose',    unit:'mg/dL',   normal:'70-100',   placeholder:'e.g. 142' },
 ];
 
-function scoreLabs(labs) {
-  let score = 0;
-  if (parseFloat(labs.bnp)        > 400)  score += 35;
-  if (parseFloat(labs.troponin)   > 0.04) score += 20;
-  if (parseFloat(labs.creatinine) > 1.5)  score += 15;
-  if (parseFloat(labs.sodium)     < 135)  score += 12;
-  if (parseFloat(labs.hemoglobin) < 12)   score += 8;
-  if (parseFloat(labs.glucose)    > 120)  score += 5;
-  return Math.min(score, 95);
-}
-
-function MockPredict(mode, labs, hasCxr, hasEcg) {
-  const labScore = scoreLabs(labs);
-  const cxrBonus = hasCxr ? 12 : 0;
-  const ecgBonus = hasEcg ? 10 : 0;
-  const base = labScore * 0.6 + cxrBonus + ecgBonus;
-  const clamp = (v) => Math.min(Math.max(Math.round(v), 2), 95);
-  const risks = {
-    mortality: clamp(base * 0.38 + Math.random() * 8),
-    heart_failure: clamp(base * 1.0 + Math.random() * 12),
-    myocardial_infarction: clamp(base * 0.25 + Math.random() * 6),
-    arrhythmia: clamp(base * 0.45 + Math.random() * 10),
-    sepsis: clamp(base * 0.30 + Math.random() * 8),
-    pulmonary_embolism: clamp(base * 0.12 + Math.random() * 4),
-    acute_kidney_injury: clamp(base * 0.55 + Math.random() * 10),
-    icu_admission: clamp(base * 0.50 + Math.random() * 10),
-  };
-  const labW = mode === 'labs'  ? 0.90 : mode === 'multimodal' ? 0.34 : 0.0;
-  const cxrW = mode === 'cxr'   ? 0.85 : mode === 'multimodal' ? 0.34 : 0.0;
-  const ecgW = mode === 'ecg'   ? 0.80 : mode === 'multimodal' ? 0.32 : 0.0;
-  const total = labW + cxrW + ecgW || 1;
-  return { risks, gates:{ vision: cxrW/total, signal: ecgW/total, clinical: labW/total } };
-}
-
 export default function AnalysisCenter() {
   const navigate = useNavigate();
   const [mode, setMode]       = useState('multimodal'); // multimodal | cxr | ecg | labs
@@ -65,6 +31,7 @@ export default function AnalysisCenter() {
   const [hasEcg, setHasEcg]   = useState(false);
   const [result, setResult]   = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
   const fileRef = useRef();
   const cancelledRef = useRef(false);
 
@@ -85,6 +52,7 @@ export default function AnalysisCenter() {
   const handleAnalyze = async () => {
     cancelledRef.current = false;
     setLoading(true);
+    setError('');
 
     const cleanLabs = Object.fromEntries(
       Object.entries(labs)
@@ -92,8 +60,8 @@ export default function AnalysisCenter() {
         .map(([k, v]) => [k, parseFloat(v)])
     );
 
-    let res;
     try {
+      let res;
       if (mode === 'cxr') {
         res = await analyzeCxr(cxrFile);
       } else if (mode === 'ecg') {
@@ -104,21 +72,26 @@ export default function AnalysisCenter() {
         // multimodal: fusion model (labs + has_ecg flags; CXR sent separately if needed)
         res = await analyzeAPI({ labs: cleanLabs, has_ecg: hasEcg, mode });
       }
+      if (cancelledRef.current) return;
+      setResult(res);
+      setStep(steps.length - 1);
     } catch (err) {
-      console.warn('Backend unavailable — falling back to mock:', err.message);
-      res = MockPredict(mode, labs, !!cxrFile, hasEcg || mode === 'ecg');
+      console.warn('Backend unavailable:', err.message);
+      if (!cancelledRef.current) {
+        setError('Backend unavailable. Please start the API to run analysis.');
+      }
+    } finally {
+      if (!cancelledRef.current) {
+        setLoading(false);
+      }
     }
-
-    if (cancelledRef.current) return;
-    setResult(res);
-    setStep(steps.length - 1);
-    setLoading(false);
   };
 
   const reset = () => {
     cancelledRef.current = true;
     setStep(0); setLabs(DEFAULT_LABS); setCxrFile(null); setCxrUrl(null);
     setHasEcg(false); setResult(null); setLoading(false);
+    setError('');
   };
 
   const canAnalyze = (mode === 'cxr' && cxrFile) || (mode === 'ecg' && hasEcg) ||
@@ -297,6 +270,12 @@ export default function AnalysisCenter() {
               <div style={{ fontSize:11, color:'var(--text-muted)', background:'var(--bg-elevated)', borderRadius:8, padding:'8px 14px', marginTop:4 }}>
                 Mode: <strong style={{color:'var(--green)'}}>{mode === 'multimodal' ? 'Multi-Modal Fusion (V3)' : `${mode.toUpperCase()} Only (Single-Modal)`}</strong>
               </div>
+            </div>
+          )}
+
+          {error && (
+            <div style={{ background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.18)', borderRadius:10, padding:'12px 14px', fontSize:12, color:'var(--text-red)' }}>
+              {error}
             </div>
           )}
 
