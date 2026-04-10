@@ -11,13 +11,13 @@ Architecture:
   → Gemini 2.5 Flash → Formatted Medical Response with Citations
 """
 
-import os, json, time, asyncio
+import os, json, time, asyncio, re
 from pathlib import Path
 from typing import Optional
 
 INDEX_DIR = Path(__file__).parent / "rag_index"
 EMBED_MODEL = "all-MiniLM-L6-v2"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.getenv("GEMINI_TIMEOUT_SEC", "35"))
 GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "3"))
 
@@ -239,6 +239,89 @@ class MedicalRAGEngine:
         self.chunk_count = 0
         self.last_gemini_error = None
         self._gemini_model = None
+        self.gemini_blocked_until_ts = 0.0
+
+    def _risk_bucket(self, value: float) -> str:
+        if value >= 70:
+            return "Critical"
+        if value >= 40:
+            return "Moderate"
+        return "Low"
+
+    def _build_structured_overview(self, patient_data: dict, extra_insight: str = "") -> str:
+        ctx = patient_data or {}
+        name = ctx.get("patient_name", "This patient")
+        age = ctx.get("age", "?")
+        gender = ctx.get("gender", "?")
+        encounter = ctx.get("encounter_label", "N/A")
+        date = ctx.get("encounter_date", "N/A")
+        risks = ctx.get("risks", {}) or {}
+        gates = ctx.get("gates", {}) or {}
+        cxr_findings = ctx.get("cxr_findings", []) or []
+        ecg_findings = ctx.get("ecg_findings", []) or []
+        labs = ctx.get("labs", []) or []
+
+        keys = [
+            ("mortality", "Mortality"),
+            ("heart_failure", "Heart Failure"),
+            ("myocardial_infarction", "MI"),
+            ("arrhythmia", "Arrhythmia"),
+            ("sepsis", "Sepsis"),
+            ("pulmonary_embolism", "PE"),
+            ("acute_kidney_injury", "AKI"),
+            ("icu_admission", "ICU"),
+        ]
+        ranked = sorted(
+            [(k, label, float(risks.get(k, 0) or 0)) for k, label in keys],
+            key=lambda x: x[2],
+            reverse=True,
+        )
+        top = ranked[:2] if ranked else [("mortality", "Mortality", 0.0), ("heart_failure", "Heart Failure", 0.0)]
+
+        labs_text = ", ".join(f"{l.get('name','?')}={l.get('value','?')}" for l in labs[:3]) if labs else "No key labs available"
+        c = round((gates.get("vision", 0.33)) * 100)
+        e = round((gates.get("signal", 0.33)) * 100)
+        l = round((gates.get("clinical", 0.34)) * 100)
+
+        lines = [
+            "### Patient Snapshot",
+            f"• **{name}, {age} y/o {gender}, Encounter {encounter} ({date})**",
+            f"• Highest risks: **{top[0][1]} {top[0][2]:.1f}% ({self._risk_bucket(top[0][2])})** and **{top[1][1]} {top[1][2]:.1f}% ({self._risk_bucket(top[1][2])})**",
+            "",
+            "### 8-Disease Risk Overview",
+            f"• Mortality **{float(risks.get('mortality', 0) or 0):.1f}%**, HF **{float(risks.get('heart_failure', 0) or 0):.1f}%**, MI **{float(risks.get('myocardial_infarction', 0) or 0):.1f}%**",
+            f"• Arrhythmia **{float(risks.get('arrhythmia', 0) or 0):.1f}%**, Sepsis **{float(risks.get('sepsis', 0) or 0):.1f}%**, PE **{float(risks.get('pulmonary_embolism', 0) or 0):.1f}%**",
+            f"• AKI **{float(risks.get('acute_kidney_injury', 0) or 0):.1f}%**, ICU **{float(risks.get('icu_admission', 0) or 0):.1f}%**",
+            "",
+            "### Clinical Drivers (CXR + ECG + Labs)",
+            f"• CXR: {cxr_findings[0] if cxr_findings else 'No major CXR finding captured'}",
+            f"• ECG: {ecg_findings[0] if ecg_findings else 'No major ECG finding captured'}",
+            f"• Labs: {labs_text}",
+            f"• Model gate balance observed: CXR {c}% | ECG {e}% | Labs {l}%",
+            "",
+            "### Recommended Clinical Focus",
+            f"• Prioritize review of **{top[0][1]}** and **{top[1][1]}** trajectory and corroborating bedside findings.",
+            "• Correlate AI risk with serial labs, ECG trend, and imaging evolution before escalation decisions.",
+            "• This output suggests risk stratification support and warrants clinician-led confirmation.",
+        ]
+        if extra_insight:
+            lines += ["", "### Model Insight", f"• {extra_insight}"]
+        lines += ["", "### Evidence", "📋 VisionCare 3.0 Encounter Profile + Retrieved Medical References"]
+        return "\n".join(lines)
+
+    def _normalize_gemini_reply(self, question: str, patient_data: dict, reply: str) -> str:
+        q = (question or "").lower()
+        text = (reply or "").strip()
+        if not text:
+            return self._build_structured_overview(patient_data)
+        asks_overview = any(k in q for k in ["overview", "all 8", "risk assessment", "summary"])
+        has_full_template = "### 8-Disease Risk Overview" in text and "### Clinical Drivers" in text
+        if asks_overview and not has_full_template:
+            brief = text.replace("\n", " ").strip()
+            if len(brief) > 220:
+                brief = brief[:220].rsplit(" ", 1)[0] + "..."
+            return self._build_structured_overview(patient_data, extra_insight=brief)
+        return text
 
     def load_index(self):
         """Load the pre-built FAISS index. Returns True if successful."""
@@ -346,12 +429,35 @@ class MedicalRAGEngine:
         self._gemini_model = genai.GenerativeModel(GEMINI_MODEL)
         return self._gemini_model
 
+    def _extract_retry_seconds(self, message: str) -> int:
+        txt = (message or "").lower()
+        match = re.search(r"retry in\s+(\d+)", txt)
+        if match:
+            return int(match.group(1))
+        match = re.search(r"retry_delay.*seconds[:=]?\s*(\d+)", txt)
+        if match:
+            return int(match.group(1))
+        return 45
+
+    def _is_quota_error(self, message: str) -> bool:
+        txt = (message or "").lower()
+        return (
+            "quota exceeded" in txt
+            or "resourceexhausted" in txt
+            or "rate limit" in txt
+            or "exceeded your current quota" in txt
+        )
+
     async def _call_gemini(self, full_prompt: str, question: str):
         """
         Call Gemini SDK with retry/backoff for transient overload/availability failures.
         Returns: (reply_text | None, error_message | None, status_code | None)
         """
         prompt = full_prompt + "\n\nUser question: " + question
+        now = time.time()
+        if now < self.gemini_blocked_until_ts:
+            wait = int(self.gemini_blocked_until_ts - now)
+            return None, f"Gemini quota cooldown active. Retry after ~{wait}s", 429
 
         attempts = max(1, GEMINI_MAX_RETRIES)
         for attempt in range(1, attempts + 1):
@@ -388,6 +494,10 @@ class MedicalRAGEngine:
 
             except Exception as exc:
                 message = f"Gemini SDK call failed: {exc}"
+                if self._is_quota_error(message):
+                    retry_sec = self._extract_retry_seconds(message)
+                    self.gemini_blocked_until_ts = time.time() + retry_sec
+                    return None, f"{message} (cooldown {retry_sec}s)", 429
                 lowered = message.lower()
                 is_retryable = (
                     "503" in lowered or "unavailable" in lowered or "resourceexhausted" in lowered
@@ -451,6 +561,7 @@ class MedicalRAGEngine:
 
         reply, err_msg, status_code = await self._call_gemini(full_prompt, question)
         if reply:
+            reply = self._normalize_gemini_reply(question, patient_data, reply)
             self.last_gemini_error = None
             return {
                 "reply": reply,
@@ -487,5 +598,6 @@ class MedicalRAGEngine:
             "gemini_timeout_sec": GEMINI_TIMEOUT_SEC,
             "gemini_max_retries": GEMINI_MAX_RETRIES,
             "last_gemini_error": self.last_gemini_error,
+            "gemini_blocked_for_sec": max(0, int(self.gemini_blocked_until_ts - time.time())),
             "index_path": str(INDEX_DIR),
         }
