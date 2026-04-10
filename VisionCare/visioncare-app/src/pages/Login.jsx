@@ -25,8 +25,8 @@ export default function Login({ onLogin }) {
         <div className="login-logo-wrap">
           <Heart size={26} color="var(--green)" fill="none" strokeWidth={2} />
         </div>
-        <div className="login-title">VisionCare 2.0</div>
-        <div className="login-sub">Evidence-based. Multi-modal. Explainable.</div>
+        <div className="login-title">VisionCare 3.0</div>
+        <div className="login-sub">8-Disease Prediction · Balanced Gates · Explainable AI</div>
 
         <div className="form-field">
           <label>Email</label>

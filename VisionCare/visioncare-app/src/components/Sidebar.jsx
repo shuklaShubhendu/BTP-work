@@ -1,10 +1,11 @@
 // src/components/Sidebar.jsx
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Microscope, BarChart3, Info, LogOut, Heart } from 'lucide-react';
+import { LayoutDashboard, Users, UserPlus, Microscope, BarChart3, Info, LogOut, Heart } from 'lucide-react';
 
 const NAV = [
   { to: '/dashboard',  icon: LayoutDashboard, label: 'Dashboard'     },
   { to: '/patients',   icon: Users,            label: 'Patients'      },
+  { to: '/onboard',    icon: UserPlus,         label: 'New Patient'   },
   { to: '/analyze',    icon: Microscope,       label: 'Analysis Center'},
   { to: '/model',      icon: BarChart3,        label: 'Model Monitor' },
   { to: '/about',      icon: Info,             label: 'About'         },
@@ -19,7 +20,7 @@ export default function Sidebar({ onLogout }) {
         </div>
         <div>
           <div className="brand-name">VisionCare</div>
-          <div className="brand-ver">v2.0</div>
+          <div className="brand-ver">v3.0</div>
         </div>
       </div>
       <nav className="sidebar-nav">

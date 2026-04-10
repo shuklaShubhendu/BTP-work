@@ -3,12 +3,14 @@ import { useState } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Sidebar       from './components/Sidebar';
 import TopBar        from './components/TopBar';
+import AIChat        from './components/AIChat';
 import Login         from './pages/Login';
 import Dashboard     from './pages/Dashboard';
 import Patients      from './pages/Patients';
 import PatientProfile   from './pages/PatientProfile';
 import EncounterAnalysis from './pages/EncounterAnalysis';
 import AnalysisCenter   from './pages/AnalysisCenter';
+import NewPatientOnboarding from './pages/NewPatientOnboarding';
 import ModelMonitor     from './pages/ModelMonitor';
 import About            from './pages/About';
 
@@ -16,6 +18,7 @@ const PAGE_TITLES = {
   '/dashboard': 'Dashboard',
   '/patients':  'Patients',
   '/analyze':   'Analysis Center',
+  '/onboard':   'New Patient Onboarding',
   '/model':     'Model Monitor',
   '/about':     'About',
 };
@@ -32,6 +35,7 @@ function AppShell({ children, onLogout }) {
         <TopBar title={title} onLogout={onLogout} showSearch={!isEncounter} />
         {children}
       </div>
+      <AIChat />
     </div>
   );
 }
@@ -54,6 +58,7 @@ export default function App() {
               <Route path="/patients/:patientId" element={<PatientProfile />} />
               <Route path="/patients/:patientId/encounters/:encounterId" element={<EncounterAnalysis />} />
               <Route path="/analyze"   element={<AnalysisCenter />} />
+              <Route path="/onboard"   element={<NewPatientOnboarding />} />
               <Route path="/model"     element={<ModelMonitor />} />
               <Route path="/about"     element={<About />} />
               <Route path="*"          element={<Navigate to="/dashboard" replace />} />

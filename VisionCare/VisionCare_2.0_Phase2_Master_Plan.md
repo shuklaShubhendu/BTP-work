@@ -785,7 +785,7 @@ POST /api/chat/explain
     Response:
         {
           "response": "The model identified several..." ,
-          "model": "gemini-2.0-flash"
+          "model": "gemini-2.5-flash"
         }
 ```
 

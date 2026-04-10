@@ -1,6 +1,8 @@
 # ── Large data / weights (mounted as volumes at runtime) ──────────────────────
 models/
 demo_images/
+rag_index/
+medical_texts/
 
 # ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/

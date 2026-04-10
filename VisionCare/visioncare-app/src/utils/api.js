@@ -1,4 +1,4 @@
-// src/utils/api.js
+// src/utils/api.js — V3 API client
 import axios from 'axios';
 
 const API = axios.create({ baseURL: 'http://127.0.0.1:8000' });
@@ -9,11 +9,15 @@ export const getPatient    = (id)    => API.get(`/api/patients/${id}`).then(r =>
 export const getEncounters = (id)    => API.get(`/api/patients/${id}/encounters`).then(r => r.data);
 export const getEncounter  = (p,e)   => API.get(`/api/patients/${p}/encounters/${e}`).then(r => r.data);
 export const chat          = (body)  => API.post('/api/chat', body).then(r => r.data);
+export const ragStatus     = ()      => API.get('/api/rag/status').then(r => r.data);
 export const getModelInfo  = ()      => API.get('/api/model/info').then(r => r.data);
 export const getModelsStatus = ()    => API.get('/api/models/status').then(r => r.data);
 
-// Multi-modal fusion
+// V3 Multi-modal fusion (returns 8 diseases + 3 gate weights)
 export const analyze       = (form)  => API.post('/api/analyze', form).then(r => r.data);
+
+// V3 Predict specific encounter
+export const predictEncounter = (encId) => API.post(`/api/predict/${encId}`).then(r => r.data);
 
 // Single-modal endpoints
 export const analyzeCxr = (file) => {

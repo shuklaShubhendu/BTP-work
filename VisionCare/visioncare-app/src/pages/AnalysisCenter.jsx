@@ -1,9 +1,11 @@
-// src/pages/AnalysisCenter.jsx — Single & Multi-modal Analysis
+// src/pages/AnalysisCenter.jsx — VisionCare 3.0 Single & Multi-modal Analysis
 import { useState, useRef } from 'react';
-import { Upload, CheckCircle, ChevronRight, Zap, RotateCcw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Upload, CheckCircle, ChevronRight, Zap, RotateCcw, UserPlus } from 'lucide-react';
 import RiskGauge from '../components/RiskGauge';
 import ECGViewer from '../components/ECGViewer';
 import CXRViewer from '../components/CXRViewer';
+import { V3_TARGETS } from '../utils/mockData';
 import { analyze as analyzeAPI, analyzeCxr, analyzeEcg, analyzeLabs } from '../utils/api';
 
 const DEFAULT_LABS = { bnp:'', troponin:'', creatinine:'', sodium:'', potassium:'', hemoglobin:'', wbc:'', glucose:'' };
@@ -34,16 +36,27 @@ function MockPredict(mode, labs, hasCxr, hasEcg) {
   const labScore = scoreLabs(labs);
   const cxrBonus = hasCxr ? 12 : 0;
   const ecgBonus = hasEcg ? 10 : 0;
-  const hf = Math.min(Math.round(labScore * 0.6 + cxrBonus + ecgBonus + Math.random() * 6), 97);
-  const mort = Math.min(Math.round(hf * 0.38 + Math.random() * 5), 95);
-  const labW = mode === 'labs'  ? 0.90 : mode === 'multimodal' ? 0.50 : 0.0;
-  const cxrW = mode === 'cxr'   ? 0.85 : mode === 'multimodal' ? 0.30 : 0.0;
-  const ecgW = mode === 'ecg'   ? 0.80 : mode === 'multimodal' ? 0.20 : 0.0;
+  const base = labScore * 0.6 + cxrBonus + ecgBonus;
+  const clamp = (v) => Math.min(Math.max(Math.round(v), 2), 95);
+  const risks = {
+    mortality: clamp(base * 0.38 + Math.random() * 8),
+    heart_failure: clamp(base * 1.0 + Math.random() * 12),
+    myocardial_infarction: clamp(base * 0.25 + Math.random() * 6),
+    arrhythmia: clamp(base * 0.45 + Math.random() * 10),
+    sepsis: clamp(base * 0.30 + Math.random() * 8),
+    pulmonary_embolism: clamp(base * 0.12 + Math.random() * 4),
+    acute_kidney_injury: clamp(base * 0.55 + Math.random() * 10),
+    icu_admission: clamp(base * 0.50 + Math.random() * 10),
+  };
+  const labW = mode === 'labs'  ? 0.90 : mode === 'multimodal' ? 0.34 : 0.0;
+  const cxrW = mode === 'cxr'   ? 0.85 : mode === 'multimodal' ? 0.34 : 0.0;
+  const ecgW = mode === 'ecg'   ? 0.80 : mode === 'multimodal' ? 0.32 : 0.0;
   const total = labW + cxrW + ecgW || 1;
-  return { hf_risk: hf, mortality_risk: mort, gates:{ vision: cxrW/total, signal: ecgW/total, clinical: labW/total } };
+  return { risks, gates:{ vision: cxrW/total, signal: ecgW/total, clinical: labW/total } };
 }
 
 export default function AnalysisCenter() {
+  const navigate = useNavigate();
   const [mode, setMode]       = useState('multimodal'); // multimodal | cxr | ecg | labs
   const [step, setStep]       = useState(0);
   const [labs, setLabs]       = useState(DEFAULT_LABS);
@@ -111,14 +124,30 @@ export default function AnalysisCenter() {
   const canAnalyze = (mode === 'cxr' && cxrFile) || (mode === 'ecg' && hasEcg) ||
     (mode === 'labs' && labs.bnp) || (mode === 'multimodal' && (cxrFile || labs.bnp || hasEcg));
 
-  const contribs = result ? [
-    { name:'CXR',  pct: Math.round(result.gates.vision   * 100), color:'#38bdf8' },
-    { name:'ECG',  pct: Math.round(result.gates.signal   * 100), color:'#22c55e' },
-    { name:'Labs', pct: Math.round(result.gates.clinical * 100), color:'#a78bfa' },
-  ] : [];
 
   return (
     <div className="page-content section-gap">
+      {/* Onboard CTA */}
+      <div className="card" onClick={() => navigate('/onboard')}
+        style={{ padding:'16px 20px', cursor:'pointer', background:'linear-gradient(135deg, rgba(34,197,94,0.06), rgba(34,197,94,0.02))', border:'1px solid var(--green-border)', transition:'all 0.2s' }}
+        onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--green)'}
+        onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--green-border)'}>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ width:40, height:40, borderRadius:10, background:'var(--green-dim)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <UserPlus size={20} color="var(--green)" />
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:700, fontSize:14 }}>🏥 Onboard New Patient</div>
+            <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>
+              Register patient details → upload clinical data → get instant V3 risk assessment
+            </div>
+          </div>
+          <div style={{ color:'var(--green)', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:4 }}>
+            Start <span style={{ fontSize:16 }}>→</span>
+          </div>
+        </div>
+      </div>
+
       {/* Mode selector */}
       <div className="card" style={{ padding:'14px 18px' }}>
         <div style={{ fontSize:13, fontWeight:600, marginBottom:12, color:'var(--text-secondary)' }}>SELECT ANALYSIS MODE</div>
@@ -233,36 +262,28 @@ export default function AnalysisCenter() {
                 </button>
               </div>
 
-              <div className="result-gauges">
-                <RiskGauge pct={result.hf_risk} label="Heart Failure Risk" size={120} />
-                <RiskGauge pct={result.mortality_risk} label="Mortality Risk" size={120} />
-              </div>
-
-              {/* Contribution bars */}
-              <div style={{ background:'var(--bg-elevated)', borderRadius:10, padding:14 }}>
-                <div style={{ fontSize:10, fontWeight:700, color:'var(--text-muted)', letterSpacing:'0.08em', marginBottom:12 }}>MODALITY CONTRIBUTION</div>
-                {contribs.filter(c => c.pct > 0).map(c => (
-                  <div key={c.name} className="contrib-row">
-                    <span className="contrib-name" style={{ color:c.color, width:36 }}>{c.name}</span>
-                    <div className="contrib-track"><div className="contrib-fill" style={{ width:`${c.pct}%`, background:c.color }} /></div>
-                    <span className="contrib-pct" style={{ color:c.color }}>{c.pct}%</span>
-                  </div>
+              {/* 8 Disease Gauges */}
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, marginTop:14 }}>
+                {V3_TARGETS.map(t => (
+                  <RiskGauge key={t.key} pct={result.risks?.[t.key] || 0} label={t.short} size={90} />
                 ))}
               </div>
 
               {/* Explanation */}
               <div className="result-explanation">
-                <strong>Clinical Interpretation:</strong><br/>
-                The {mode} model assigns <strong>{result.hf_risk}% HF risk</strong> based on {
-                  contribs.filter(c=>c.pct>0).sort((a,b)=>b.pct-a.pct)[0]?.name
-                } being the primary driver.
-                {result.hf_risk >= 70 && <><br/><br/>⚠️ <strong style={{color:'var(--text-red)'}}>Elevated risk detected.</strong> Recommend immediate cardiology review, BNP repeat, and echocardiography.</>}
-                {result.hf_risk >= 40 && result.hf_risk < 70 && <><br/><br/>🟡 <strong style={{color:'var(--text-amber)'}}>Moderate risk.</strong> Close monitoring and outpatient follow-up advised.</>}
-                {result.hf_risk < 40 && <><br/><br/>🟢 <strong style={{color:'var(--text-green)'}}>Low risk.</strong> Routine follow-up as scheduled.</>}
+                <strong>Clinical Interpretation (V3 — 8 Diseases):</strong><br/>
+                {(() => {
+                  const maxKey = Object.entries(result.risks || {}).sort(([,a],[,b]) => b - a)[0]?.[0];
+                  const maxVal = result.risks?.[maxKey] || 0;
+                  return <span>Highest risk: <strong>{maxKey?.replace(/_/g,' ')} at {maxVal}%</strong>.</span>;
+                })()}
+                {(result.risks?.heart_failure >= 70 || result.risks?.mortality >= 50) && <><br/><br/>⚠️ <strong style={{color:'var(--text-red)'}}>Critical risk detected.</strong> Immediate cardiology review recommended.</>}
+                {(result.risks?.heart_failure >= 40 && result.risks?.heart_failure < 70) && <><br/><br/>🟡 <strong style={{color:'var(--text-amber)'}}>Moderate risk.</strong> Close monitoring advised.</>}
+                {(result.risks?.heart_failure < 40 && result.risks?.mortality < 25) && <><br/><br/>🟢 <strong style={{color:'var(--text-green)'}}>Low risk.</strong> Routine follow-up.</>}
                 <br/><br/>
                 <span style={{ fontSize:11, color: result.real_inference ? 'var(--green)' : 'var(--text-muted)' }}>
                   {result.real_inference ? '✅ Real inference · ' : '⚙️ Mock prediction · '}
-                  VisionCare {result.model_version ?? '2.0'} · AUC 0.8105 · SYMILE-MIMIC trained
+                  VisionCare {result.model_version ?? '3.0'} · Macro AUC 0.7926 · 8 targets · Balanced Gates
                 </span>
               </div>
             </div>
@@ -274,7 +295,7 @@ export default function AnalysisCenter() {
                 {mode === 'multimodal' ? 'Upload CXR, load ECG, and enter lab values to run fusion analysis.' : `Provide ${mode.toUpperCase()} data to run single-modal analysis.`}
               </div>
               <div style={{ fontSize:11, color:'var(--text-muted)', background:'var(--bg-elevated)', borderRadius:8, padding:'8px 14px', marginTop:4 }}>
-                Mode: <strong style={{color:'var(--green)'}}>{mode === 'multimodal' ? 'Multi-Modal Fusion (V2)' : `${mode.toUpperCase()} Only (Single-Modal)`}</strong>
+                Mode: <strong style={{color:'var(--green)'}}>{mode === 'multimodal' ? 'Multi-Modal Fusion (V3)' : `${mode.toUpperCase()} Only (Single-Modal)`}</strong>
               </div>
             </div>
           )}

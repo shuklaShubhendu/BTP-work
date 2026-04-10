@@ -61,7 +61,7 @@ export default function PatientProfile() {
       {patient.severity === 'critical' && (
         <div style={{ background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.2)', borderRadius:10, padding:'12px 16px', fontSize:13, color:'var(--text-red)', display:'flex', alignItems:'center', gap:10 }}>
           <span style={{ fontSize:18 }}>⚠️</span>
-          <span><strong>High Priority Patient</strong> — Latest encounter shows critical HF risk ({patient.hf_risk}%). Immediate clinical review recommended per AHA 2022 guidelines.</span>
+          <span><strong>High Priority Patient</strong> — Latest encounter shows elevated multi-disease risks. Immediate clinical review recommended per AHA 2022 guidelines.</span>
         </div>
       )}
 
@@ -79,8 +79,8 @@ export default function PatientProfile() {
                 <div className="enc-date">Admitted {enc.date}</div>
               </div>
               <div className="enc-risks-row">
-                {getBadge(enc.hf_risk)}
-                {getMortBadge(enc.mortality_risk)}
+                {getBadge(enc.risks?.heart_failure || enc.hf_risk || 0)}
+                {getMortBadge(enc.risks?.mortality || enc.mortality_risk || 0)}
               </div>
             </div>
           ))}
@@ -92,9 +92,9 @@ export default function PatientProfile() {
         <div className="card">
           <div className="card-title">Latest Encounter Summary — {encounters[0].label}</div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
-            {[['CXR Contribution', `${Math.round((encounters[0].gates?.vision||0.33)*100)}%`, '#38bdf8'],
-              ['ECG Contribution', `${Math.round((encounters[0].gates?.signal||0.33)*100)}%`, '#22c55e'],
-              ['Labs Contribution',`${Math.round((encounters[0].gates?.clinical||0.34)*100)}%`, '#a78bfa']
+            {[['Macro AUC', '0.7926', 'var(--green)'],
+              ['Disease Targets', '8', '#38bdf8'],
+              ['Best Epoch', '17/25', '#a78bfa']
             ].map(([label, val, color]) => (
               <div key={label} style={{ background:'var(--bg-elevated)', borderRadius:8, padding:'14px 16px', textAlign:'center' }}>
                 <div style={{ fontSize:10, color:'var(--text-muted)', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em' }}>{label}</div>

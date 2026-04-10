@@ -13,11 +13,16 @@ services:
       - ./backend/models:/app/models
       # CXR demo images — place your patient images here
       - ./backend/demo_images:/app/demo_images
+      # Medical textbooks (PDFs) for RAG index building
+      - ./backend/medical_texts:/app/medical_texts
+      # RAG FAISS index (persisted across restarts)
+      - ./backend/rag_index:/app/rag_index
       # Mount the parent VisionCare folder so backend can import colab_fusion_v2.py
       - .:/visioncare_src
     environment:
-      - MODEL_VERSION=V2
+      - MODEL_VERSION=V3
       - PYTHONPATH=/app:/visioncare_src
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-AIzaSyA3W1njiP1yH6x_ZLGC4xOUQ_miADTexwA}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
@@ -30,9 +35,6 @@ services:
     build:
       context: ./visioncare-app
       dockerfile: Dockerfile
-      args:
-        # Pass your Gemini key at build time: docker-compose build --build-arg GEMINI_KEY=AIza...
-        VITE_GEMINI_KEY: ${VITE_GEMINI_KEY:-}
     container_name: visioncare-frontend
     ports:
       - "3000:80"
